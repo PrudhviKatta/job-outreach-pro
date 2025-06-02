@@ -21,16 +21,6 @@ export default function Home() {
             <h3 className="text-lg font-semibold mb-2">Send Emails</h3>
             <p className="text-gray-600">Personalized email campaigns</p>
           </Link>
-
-          <Link
-            href="/linkedin"
-            className="bg-white p-6 rounded-lg shadow-md hover:shadow-lg transition-shadow"
-          >
-            <Users className="w-12 h-12 text-indigo-600 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold mb-2">LinkedIn Outreach</h3>
-            <p className="text-gray-600">Manage connection requests</p>
-          </Link>
-
           <Link
             href="/dashboard"
             className="bg-white p-6 rounded-lg shadow-md hover:shadow-lg transition-shadow"

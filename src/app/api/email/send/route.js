@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { sendBulkEmails, replaceVariables } from "@/lib/email";
 import { generateTrackingId } from "@/lib/utils";
@@ -6,30 +7,95 @@ import { generateTrackingId } from "@/lib/utils";
 export async function POST(request) {
   try {
     const { templateId, resumeId, recipients } = await request.json();
+    // Get the auth token from the request
+    const authHeader = request.headers.get("authorization");
+    let token = authHeader?.replace("Bearer ", "");
 
-    // Fetch template
-    const { data: template, error: templateError } = await supabase
+    // If no auth header, try to get from cookies
+    if (!token) {
+      const cookies = request.headers.get("cookie");
+      if (cookies) {
+        const authCookie = cookies
+          .split(";")
+          .find((c) => c.trim().startsWith("sb-"))
+          ?.split("=")[1];
+
+        if (authCookie) {
+          try {
+            const parsed = JSON.parse(decodeURIComponent(authCookie));
+            token = parsed.access_token;
+          } catch (e) {
+            console.log("Could not parse auth cookie");
+          }
+        }
+      }
+    }
+
+    // Create admin client for database operations
+    const supabaseAdmin = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_KEY
+    );
+
+    // Get user from token
+    let user;
+    if (token) {
+      const { data: userData, error: userError } = await supabase.auth.getUser(
+        token
+      );
+      if (!userError && userData?.user) {
+        user = userData.user;
+      }
+    }
+
+    // If we still don't have a user, try to get from session
+    if (!user) {
+      const { data: sessionData } = await supabase.auth.getSession();
+      user = sessionData?.session?.user;
+    }
+
+    if (!user) {
+      return NextResponse.json(
+        { success: false, error: "Not authenticated" },
+        { status: 401 }
+      );
+    }
+
+    console.log("User found:", user.id);
+
+    // Fetch template using admin client
+    const { data: template, error: templateError } = await supabaseAdmin
       .from("templates")
       .select("*")
       .eq("id", templateId)
+      .eq("user_id", user.id)
       .single();
 
-    if (templateError) throw templateError;
+    if (templateError) {
+      console.error("Template error:", templateError);
+      throw new Error(`Template not found: ${templateError.message}`);
+    }
 
-    // Fetch resume
-    const { data: resume, error: resumeError } = await supabase
-      .from("resumes")
-      .select("*")
-      .eq("id", resumeId)
-      .single();
+    console.log("Template found:", template.name);
 
-    if (resumeError) throw resumeError;
+    // Fetch resume using admin client
+    let resume = null;
+    if (resumeId) {
+      const { data: resumeData, error: resumeError } = await supabaseAdmin
+        .from("resumes")
+        .select("*")
+        .eq("id", resumeId)
+        .eq("user_id", user.id)
+        .single();
 
-    // Get user
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
+      if (resumeError) {
+        console.error("Resume error:", resumeError);
+        throw new Error(`Resume not found: ${resumeError.message}`);
+      }
+      resume = resumeData;
+    }
+
+    console.log("Resume found:", resume?.display_name || "No resume selected");
 
     // Prepare emails
     const emails = recipients.map((recipient) => {
@@ -52,12 +118,14 @@ export async function POST(request) {
         to: recipient.email,
         subject,
         body,
-        attachments: [
-          {
-            filename: resume.file_name,
-            path: resume.file_url,
-          },
-        ],
+        attachments: resume
+          ? [
+              {
+                filename: resume.file_name,
+                path: resume.file_url,
+              },
+            ]
+          : [],
         trackingId,
         metadata: {
           recipientName: recipient.name,
@@ -67,15 +135,19 @@ export async function POST(request) {
       };
     });
 
+    console.log("Sending emails to:", emails.length, "recipients");
+
     // Send emails with delay
     const results = await sendBulkEmails(emails);
 
-    // Save to database
+    console.log("Email results:", results);
+
+    // Save to database using admin client
     const outreachRecords = [];
     for (let i = 0; i < recipients.length; i++) {
       if (results[i].success) {
         // Save contact if doesn't exist
-        const { data: contact } = await supabase
+        const { data: contact } = await supabaseAdmin
           .from("contacts")
           .upsert(
             {
@@ -97,7 +169,7 @@ export async function POST(request) {
           user_id: user.id,
           contact_id: contact?.id,
           template_id: templateId,
-          resume_id: resumeId,
+          resume_id: resumeId || null,
           type: "email",
           subject: emails[i].subject,
           content: emails[i].body,
@@ -109,7 +181,13 @@ export async function POST(request) {
     }
 
     if (outreachRecords.length > 0) {
-      await supabase.from("outreach_history").insert(outreachRecords);
+      const { error: insertError } = await supabaseAdmin
+        .from("outreach_history")
+        .insert(outreachRecords);
+
+      if (insertError) {
+        console.error("Error saving outreach history:", insertError);
+      }
     }
 
     return NextResponse.json({

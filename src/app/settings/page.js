@@ -18,6 +18,7 @@ export default function SettingsPage() {
   const [customFields, setCustomFields] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [resumeLabel, setResumeLabel] = useState("");
 
   useEffect(() => {
     fetchSettings();
@@ -106,7 +107,7 @@ export default function SettingsPage() {
       // Save to database
       const { error: dbError } = await supabase.from("resumes").insert({
         user_id: user.id,
-        display_name: file.name.replace(/\.[^/.]+$/, ""),
+        display_name: resumeLabel,
         file_url: publicUrl,
         file_name: file.name,
         file_size: file.size,
@@ -116,6 +117,7 @@ export default function SettingsPage() {
 
       toast.success("Resume uploaded!");
       fetchSettings();
+      setResumeLabel("");
     } catch (error) {
       toast.error("Error uploading resume");
     } finally {
@@ -252,22 +254,38 @@ export default function SettingsPage() {
       <div className="bg-white p-6 rounded-lg shadow-md">
         <h2 className="text-xl font-semibold mb-4">Resume Management</h2>
 
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Upload New Resume
-          </label>
-          <input
-            type="file"
-            accept=".pdf,.doc,.docx"
-            onChange={handleResumeUpload}
-            disabled={uploading || resumes.length >= 10}
-            className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
-          />
-          {resumes.length >= 10 && (
-            <p className="text-sm text-red-600 mt-1">
-              Maximum 10 resumes allowed
-            </p>
-          )}
+        <div className="space-y-3 mb-6">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Resume Label *
+            </label>
+            <input
+              type="text"
+              value={resumeLabel}
+              onChange={(e) => setResumeLabel(e.target.value)}
+              placeholder="e.g. Frontend Developer Resume"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+              required
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Upload Resume File *
+            </label>
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx"
+              onChange={handleResumeUpload}
+              disabled={uploading || !resumeLabel || resumes.length >= 10}
+              className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed file:disabled:bg-gray-100 file:disabled:text-gray-400"
+            />
+            {resumes.length >= 10 && (
+              <p className="text-sm text-red-600 mt-1">
+                Maximum 10 resumes allowed
+              </p>
+            )}{" "}
+          </div>
         </div>
 
         <div className="space-y-3">
@@ -286,10 +304,15 @@ export default function SettingsPage() {
                   }
                   className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
                 />
-                <span className="ml-3 text-sm font-medium">
-                  {resume.display_name}
-                  {settings.default_resume_id === resume.id && " ⭐"}
-                </span>
+                <div className="ml-3">
+                  <span className="text-sm font-medium">
+                    {resume.display_name}
+                    {settings.default_resume_id === resume.id && " ⭐"}
+                  </span>
+                  <p className="text-xs text-gray-500 mt-1">
+                    File: {resume.file_name}
+                  </p>
+                </div>
               </div>
               <button
                 onClick={() => handleDeleteResume(resume.id)}

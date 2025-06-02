@@ -69,6 +69,13 @@ export default function EmailForm({
               </option>
             ))}
           </select>
+          {!selectedTemplate && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
+              <p className="text-yellow-800 text-sm">
+                Please select a template first to add recipients
+              </p>
+            </div>
+          )}
         </div>
 
         <hr className="my-6" />
@@ -88,6 +95,7 @@ export default function EmailForm({
               }
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               required
+              disabled={!selectedTemplate}
             />
           </div>
 
@@ -103,6 +111,7 @@ export default function EmailForm({
               }
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               required
+              disabled={!selectedTemplate}
             />
           </div>
 
@@ -117,6 +126,7 @@ export default function EmailForm({
                 setRecipientForm({ ...recipientForm, company: e.target.value })
               }
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              disabled={!selectedTemplate}
             />
           </div>
 
@@ -131,6 +141,7 @@ export default function EmailForm({
                 setRecipientForm({ ...recipientForm, position: e.target.value })
               }
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              disabled={!selectedTemplate}
             />
           </div>
 

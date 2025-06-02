@@ -1,13 +1,25 @@
 import Button from "@/components/UI/Button";
 import { Trash2, Send } from "lucide-react";
 
-export default function RecipientList({ recipients, onRemove, onSend }) {
+export default function RecipientList({
+  recipients,
+  onRemove,
+  onSend,
+  selectedResume,
+  sending,
+}) {
   return (
     <div className="bg-white p-6 rounded-lg shadow-md">
       <h2 className="text-xl font-semibold mb-4">
         Recipients ({recipients.length})
       </h2>
-
+      {!selectedResume && recipients.length > 0 && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-4">
+          <p className="text-yellow-800 text-sm">
+            ⚠️ No resume selected - emails will be sent without attachment
+          </p>
+        </div>
+      )}
       {recipients.length === 0 ? (
         <p className="text-gray-500 text-center py-8">
           No recipients added yet
@@ -45,7 +57,7 @@ export default function RecipientList({ recipients, onRemove, onSend }) {
             className="w-full flex items-center justify-center"
           >
             <Send className="w-4 h-4 mr-2" />
-            Send All Emails
+            {sending ? "Sending..." : "Send All Emails"}{" "}
           </Button>
         </>
       )}

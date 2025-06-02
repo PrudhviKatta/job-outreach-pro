@@ -9,7 +9,6 @@ export default function MobileNav() {
   const navigation = [
     { name: "Home", href: "/dashboard", icon: Home },
     { name: "Email", href: "/email", icon: Send },
-    { name: "LinkedIn", href: "/linkedin", icon: Users },
     { name: "Templates", href: "/templates", icon: FileText },
     { name: "Settings", href: "/settings", icon: Settings },
   ];

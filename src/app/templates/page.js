@@ -150,10 +150,6 @@ export default function TemplatesPage() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="email">Email</option>
-                  <option value="linkedin_connection">
-                    LinkedIn Connection
-                  </option>
-                  <option value="linkedin_message">LinkedIn Message</option>
                 </select>
               </div>
             </div>
