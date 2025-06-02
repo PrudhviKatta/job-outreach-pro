@@ -21,9 +21,11 @@ export default function AuthCheck({ children }) {
 
       if (event === "SIGNED_IN") {
         setUser(session?.user);
-        if (pathname.startsWith("/auth/")) {
-          router.push("/dashboard");
-        }
+        setTimeout(() => {
+          if (pathname.startsWith("/auth/")) {
+            router.push("/dashboard");
+          }
+        }, 100);
       } else if (event === "SIGNED_OUT") {
         setUser(null);
         router.push("/auth/login");
@@ -46,7 +48,7 @@ export default function AuthCheck({ children }) {
 
       if (!session && !isAuthPage) {
         router.push("/auth/login");
-      } else if (session && pathname.startsWith("/auth/")) {
+      } else if (session && isAuthPage) {
         router.push("/dashboard");
       }
     } catch (error) {
@@ -71,7 +73,11 @@ export default function AuthCheck({ children }) {
 
   // Only render protected content if user exists
   if (!user) {
-    return null;
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-lg">Redirecting to login...</div>
+      </div>
+    );
   }
 
   return children;

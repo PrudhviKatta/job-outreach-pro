@@ -26,21 +26,7 @@ export default function LoginPage() {
 
       if (error) throw error;
 
-      // Debug logs BEFORE redirect
-      console.log("Login response:", data);
-
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      console.log("Session after login:", session);
-
       toast.success("Login successful!");
-
-      // Small delay to ensure session is set
-      setTimeout(() => {
-        router.push("/dashboard");
-        router.refresh();
-      }, 100);
     } catch (error) {
       toast.error(error.message);
     } finally {

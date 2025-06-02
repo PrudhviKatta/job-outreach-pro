@@ -3,6 +3,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
 import { useState } from "react";
+import { supabase } from "@/lib/supabase";
+import { useRouter } from "next/navigation";
 
 export default function Header() {
   const pathname = usePathname();
@@ -14,6 +16,13 @@ export default function Header() {
     { name: "Templates", href: "/templates" },
     { name: "Settings", href: "/settings" },
   ];
+
+  const router = useRouter();
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.push("/auth/login");
+  };
 
   return (
     <header className="bg-white shadow-sm">
@@ -48,6 +57,12 @@ export default function Header() {
             ) : (
               <Menu className="h-6 w-6 text-gray-700" />
             )}
+          </button>
+          <button
+            onClick={handleLogout}
+            className="hidden lg:block text-sm font-medium text-gray-700 hover:text-red-600"
+          >
+            Logout
           </button>
         </div>
 
