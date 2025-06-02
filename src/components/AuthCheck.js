@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
@@ -9,11 +9,35 @@ export default function AuthCheck({ children }) {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
 
+  const checkUser = useCallback(async () => {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      console.log("Initial session check:", session);
+
+      setUser(session?.user);
+
+      const isAuthPage = pathname.startsWith("/auth/") || pathname === "/";
+
+      if (!session && !isAuthPage) {
+        router.push("/auth/login");
+      } else if (
+        session &&
+        (pathname.startsWith("/auth/") || pathname === "/")
+      ) {
+        router.push("/dashboard");
+      }
+    } catch (error) {
+      console.error("Auth check error:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, [pathname, router]);
+
   useEffect(() => {
-    // Check initial session
     checkUser();
 
-    // Listen for auth changes
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
@@ -33,30 +57,7 @@ export default function AuthCheck({ children }) {
     });
 
     return () => subscription.unsubscribe();
-  }, [pathname, router]);
-
-  async function checkUser() {
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      console.log("Initial session check:", session);
-
-      setUser(session?.user);
-
-      const isAuthPage = pathname.startsWith("/auth/") || pathname === "/";
-
-      if (!session && !isAuthPage) {
-        router.push("/auth/login");
-      } else if (session && isAuthPage) {
-        router.push("/dashboard");
-      }
-    } catch (error) {
-      console.error("Auth check error:", error);
-    } finally {
-      setLoading(false);
-    }
-  }
+  }, [checkUser, pathname, router]);
 
   if (loading) {
     return (
@@ -66,12 +67,10 @@ export default function AuthCheck({ children }) {
     );
   }
 
-  // Don't render auth wrapper on auth pages
   if (pathname.startsWith("/auth/") || pathname === "/") {
     return children;
   }
 
-  // Only render protected content if user exists
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center">
