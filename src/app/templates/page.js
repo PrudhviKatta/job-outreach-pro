@@ -1,9 +1,23 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import { Plus, Edit2, Trash2 } from "lucide-react";
 import Button from "@/components/UI/Button";
 import toast from "react-hot-toast";
+import dynamic from "next/dynamic";
+
+// Dynamically import MDEditor to avoid SSR issues
+const MDEditor = dynamic(
+  () => import("@uiw/react-md-editor").then((mod) => mod.default),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-48 bg-gray-100 rounded animate-pulse flex items-center justify-center">
+        Loading editor...
+      </div>
+    ),
+  }
+);
 
 export default function TemplatesPage() {
   const [templates, setTemplates] = useState([]);
@@ -25,6 +39,7 @@ export default function TemplatesPage() {
     const { data, error } = await supabase
       .from("templates")
       .select("*")
+      .is("deleted_at", null) // Only fetch non-deleted templates
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -47,7 +62,6 @@ export default function TemplatesPage() {
         if (error) throw error;
         toast.success("Template updated!");
       } else {
-        // In handleSubmit function, update the fetch call:
         const {
           data: { session },
         } = await supabase.auth.getSession();
@@ -81,16 +95,26 @@ export default function TemplatesPage() {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm("Are you sure you want to delete this template?")) return;
+    if (
+      !confirm(
+        "Are you sure you want to archive this template? It will be hidden but your email history will be preserved."
+      )
+    )
+      return;
 
     try {
-      const { error } = await supabase.from("templates").delete().eq("id", id);
+      // Soft delete - set deleted_at timestamp
+      const { error } = await supabase
+        .from("templates")
+        .update({ deleted_at: new Date().toISOString() })
+        .eq("id", id);
 
       if (error) throw error;
-      toast.success("Template deleted!");
+      toast.success("Template archived!");
       fetchTemplates();
     } catch (error) {
-      toast.error("Error deleting template");
+      toast.error("Error archiving template");
+      console.error("Archive error:", error);
     }
   };
 
@@ -194,21 +218,26 @@ export default function TemplatesPage() {
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Message Body
               </label>
-              <textarea
-                value={formData.body}
-                onChange={(e) =>
-                  setFormData({ ...formData, body: e.target.value })
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                rows="8"
-                placeholder="Hi {{recruiterName}}, ..."
-                required
-              />
+              <div className="border border-gray-300 rounded-lg overflow-hidden">
+                <MDEditor
+                  value={formData.body}
+                  onChange={(value) =>
+                    setFormData({ ...formData, body: value || "" })
+                  }
+                  preview="edit"
+                  hideToolbar={false}
+                  height={300}
+                  data-color-mode="light"
+                />
+              </div>
               <p className="text-sm text-gray-500 mt-1">
                 Available variables:{" "}
                 {
                   "{{recruiterName}}, {{company}}, {{position}}, {{myName}}, {{myEmail}}"
                 }
+              </p>
+              <p className="text-xs text-gray-400 mt-1">
+                Use markdown: **bold**, *italic*, - bullet points, [link](url)
               </p>
             </div>
 
@@ -265,6 +294,7 @@ export default function TemplatesPage() {
                 <button
                   onClick={() => handleDelete(template.id)}
                   className="text-red-600 hover:text-red-700"
+                  title="Archive template"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -277,9 +307,9 @@ export default function TemplatesPage() {
               </p>
             )}
 
-            <p className="text-sm text-gray-700 line-clamp-3">
-              {template.body}
-            </p>
+            <div className="text-sm text-gray-700 line-clamp-3">
+              <div dangerouslySetInnerHTML={{ __html: template.body }} />
+            </div>
           </div>
         ))}
       </div>

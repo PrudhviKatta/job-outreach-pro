@@ -53,3 +53,40 @@
 .animate-pulse {
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
+
+/* Add this to your src/app/globals.css file */
+
+/* MD Editor Styling */
+.w-md-editor {
+  background-color: white !important;
+}
+
+.w-md-editor.w-md-editor-focus {
+  border-color: #4f46e5 !important;
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2) !important;
+}
+
+.w-md-editor-text-textarea,
+.w-md-editor-text {
+  font-size: 14px !important;
+  font-family: inherit !important;
+}
+
+.w-md-editor-preview {
+  font-family: inherit !important;
+}
+
+/* Ensure variables are visible in preview */
+.w-md-editor-preview p {
+  margin-bottom: 1em;
+}
+
+.w-md-editor-preview ul,
+.w-md-editor-preview ol {
+  margin-bottom: 1em;
+  padding-left: 1.5em;
+}
+
+.w-md-editor-preview strong {
+  font-weight: 600;
+}
