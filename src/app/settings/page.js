@@ -362,8 +362,8 @@ export default function SettingsPage() {
                 </h4>
                 <p className="text-sm text-gray-700 mb-3">
                   An app password is a secure way to let third-party apps access
-                  your email without sharing your main password. It's required
-                  when you have 2-factor authentication enabled.
+                  your email without sharing your main password. It&apos;s
+                  required when you have 2-factor authentication enabled.
                 </p>
 
                 <div className="space-y-2 text-sm">
