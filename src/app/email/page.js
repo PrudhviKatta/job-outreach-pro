@@ -18,6 +18,17 @@ export default function EmailPage() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [emailConfigured, setEmailConfigured] = useState(false);
+  // Add these new state variables after the existing ones
+  const [currentlySending, setCurrentlySending] = useState(null);
+  const [sentRecipients, setSentRecipients] = useState([]);
+  const [failedRecipients, setFailedRecipients] = useState([]);
+  const [sendingProgress, setSendingProgress] = useState({
+    sent: 0,
+    failed: 0,
+    total: 0,
+  });
+  const [isPaused, setIsPaused] = useState(false);
+  const [shouldStop, setShouldStop] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -72,10 +83,6 @@ export default function EmailPage() {
     setRecipients([...recipients, { ...recipient, id: Date.now() }]);
   };
 
-  const handleRemoveRecipient = (id) => {
-    setRecipients(recipients.filter((r) => r.id !== id));
-  };
-
   const handleSendEmails = async () => {
     if (!selectedTemplate || recipients.length === 0) {
       toast.error("Please fill all required fields");
@@ -83,6 +90,9 @@ export default function EmailPage() {
     }
 
     setSending(true);
+    setShouldStop(false);
+    setIsPaused(false);
+    setSendingProgress({ sent: 0, failed: 0, total: recipients.length });
 
     try {
       // Get the current session for auth
@@ -95,37 +105,189 @@ export default function EmailPage() {
         return;
       }
 
-      console.log("Sending email request...");
+      console.log(
+        "Starting email campaign for",
+        recipients.length,
+        "recipients"
+      );
 
-      const response = await fetch("/api/email/send", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          templateId: selectedTemplate,
-          resumeId: selectedResume,
-          recipients,
-        }),
-      });
+      // Send emails one by one
+      for (let i = 0; i < recipients.length; i++) {
+        // Check if user wants to stop
+        if (shouldStop) {
+          break;
+        }
 
-      const data = await response.json();
-      console.log("Email response:", data);
+        // Wait if paused
+        while (isPaused && !shouldStop) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
 
-      if (data.success) {
-        toast.success(`Successfully sent ${data.sent} emails!`);
-        setRecipients([]);
-        setSelectedTemplate("");
-        setSelectedResume("");
-      } else {
-        toast.error(data.error || "Error sending emails");
+        if (shouldStop) break;
+
+        const recipient = recipients[i];
+        setCurrentlySending(recipient);
+
+        try {
+          const response = await fetch("/api/email/send", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({
+              templateId: selectedTemplate,
+              resumeId: selectedResume,
+              recipients: [recipient], // Send one at a time
+            }),
+          });
+
+          const data = await response.json();
+          console.log("Email response for", recipient.email, ":", data);
+
+          if (data.success) {
+            // Move to sent list
+            setSentRecipients((prev) => [
+              ...prev,
+              {
+                ...recipient,
+                sentAt: new Date().toISOString(),
+              },
+            ]);
+
+            // Remove from recipients list
+            setRecipients((prev) => prev.filter((r) => r.id !== recipient.id));
+
+            // Update progress
+            setSendingProgress((prev) => ({
+              ...prev,
+              sent: prev.sent + 1,
+            }));
+          } else {
+            // Move to failed list
+            setFailedRecipients((prev) => [
+              ...prev,
+              {
+                ...recipient,
+                error: data.error || "Unknown error",
+              },
+            ]);
+
+            // Remove from recipients list
+            setRecipients((prev) => prev.filter((r) => r.id !== recipient.id));
+
+            // Update progress
+            setSendingProgress((prev) => ({
+              ...prev,
+              failed: prev.failed + 1,
+            }));
+          }
+        } catch (error) {
+          console.error("Send email error for", recipient.email, ":", error);
+
+          // Move to failed list
+          setFailedRecipients((prev) => [
+            ...prev,
+            {
+              ...recipient,
+              error: error.message,
+            },
+          ]);
+
+          // Remove from recipients list
+          setRecipients((prev) => prev.filter((r) => r.id !== recipient.id));
+
+          // Update progress
+          setSendingProgress((prev) => ({
+            ...prev,
+            failed: prev.failed + 1,
+          }));
+        }
+
+        setCurrentlySending(null);
+
+        // Add delay between emails (except for the last one)
+        if (i < recipients.length - 1 && !shouldStop) {
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
       }
+
+      // Show completion message
+      const finalProgress = sendingProgress;
+      if (finalProgress.sent > 0 || finalProgress.failed > 0) {
+        if (finalProgress.failed === 0) {
+          toast.success(`Successfully sent ${finalProgress.sent} emails!`);
+        } else if (finalProgress.sent === 0) {
+          toast.error(`All ${finalProgress.failed} emails failed to send`);
+        } else {
+          toast.success(
+            `Campaign complete: ${finalProgress.sent} sent, ${finalProgress.failed} failed`
+          );
+        }
+      }
+
+      // Reset template and resume selection
+      setSelectedTemplate("");
+      setSelectedResume("");
     } catch (error) {
-      console.error("Send email error:", error);
-      toast.error("Error sending emails");
+      console.error("Email campaign error:", error);
+      toast.error("Error during email campaign");
     } finally {
       setSending(false);
+      setCurrentlySending(null);
+      setIsPaused(false);
+      setShouldStop(false);
+    }
+  };
+
+  const handlePauseSending = () => {
+    setIsPaused(true);
+    toast.info("Email sending paused");
+  };
+
+  const handleResumeSending = () => {
+    setIsPaused(false);
+    toast.info("Email sending resumed");
+  };
+
+  const handleStopSending = () => {
+    setShouldStop(true);
+    setIsPaused(false);
+    toast.info("Stopping email campaign...");
+  };
+
+  const handleRetryFailed = async (failedList) => {
+    if (!failedList || failedList.length === 0) return;
+
+    // Move failed recipients back to main recipients list
+    setRecipients((prev) => [...prev, ...failedList]);
+
+    // Remove from failed list
+    setFailedRecipients((prev) =>
+      prev.filter(
+        (failed) => !failedList.find((retry) => retry.id === failed.id)
+      )
+    );
+
+    // Update progress total
+    setSendingProgress((prev) => ({
+      ...prev,
+      total: prev.total, // Keep the same total, just redistributing
+    }));
+
+    toast.info(`${failedList.length} recipients moved back to queue`);
+  };
+
+  const handleRemoveRecipient = (id) => {
+    if (id.toString().startsWith("failed-")) {
+      // Remove from failed list
+      const actualId = id.replace("failed-", "");
+      setFailedRecipients((prev) =>
+        prev.filter((r) => r.id.toString() !== actualId)
+      );
+    } else {
+      // Remove from main recipients list
+      setRecipients((prev) => prev.filter((r) => r.id !== id));
     }
   };
 
@@ -183,6 +345,14 @@ export default function EmailPage() {
             onSend={handleSendEmails}
             selectedResume={selectedResume}
             sending={sending}
+            currentlySending={currentlySending}
+            sentRecipients={sentRecipients}
+            failedRecipients={failedRecipients}
+            sendingProgress={sendingProgress}
+            onRetryFailed={handleRetryFailed}
+            onPauseSending={handlePauseSending}
+            onResumeSending={handleResumeSending}
+            isPaused={isPaused}
           />
         </div>
       </div>
