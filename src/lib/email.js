@@ -1,13 +1,65 @@
+// src/lib/email.js
 import nodemailer from "nodemailer";
+import crypto from "crypto";
 
-const createTransporter = () => {
+// Encryption utilities
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32); // 32 bytes key
+const ALGORITHM = "aes-256-cbc";
+
+export const encryptPassword = (password) => {
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipher(ALGORITHM, ENCRYPTION_KEY);
+  let encrypted = cipher.update(password, "utf8", "hex");
+  encrypted += cipher.final("hex");
+  return iv.toString("hex") + ":" + encrypted;
+};
+
+export const decryptPassword = (encryptedPassword) => {
+  const parts = encryptedPassword.split(":");
+  const iv = Buffer.from(parts[0], "hex");
+  const encryptedText = parts[1];
+  const decipher = crypto.createDecipher(ALGORITHM, ENCRYPTION_KEY);
+  let decrypted = decipher.update(encryptedText, "hex", "utf8");
+  decrypted += decipher.final("utf8");
+  return decrypted;
+};
+
+const createTransporter = (senderEmail, appPassword) => {
+  // Determine email service based on sender email domain
+  let service = "gmail"; // default
+  if (
+    senderEmail.includes("@outlook.") ||
+    senderEmail.includes("@hotmail.") ||
+    senderEmail.includes("@live.")
+  ) {
+    service = "outlook";
+  } else if (senderEmail.includes("@yahoo.")) {
+    service = "yahoo";
+  }
+
   return nodemailer.createTransport({
-    service: "gmail",
+    service,
     auth: {
-      user: process.env.GMAIL_USER,
-      pass: process.env.GMAIL_APP_PASSWORD,
+      user: senderEmail,
+      pass: appPassword,
     },
+    secure: true,
   });
+};
+
+// Test SMTP connection with user credentials
+export const testSMTPConnection = async (senderEmail, appPassword) => {
+  try {
+    const transporter = createTransporter(senderEmail, appPassword);
+    await transporter.verify();
+    return { success: true, message: "SMTP connection verified successfully!" };
+  } catch (error) {
+    console.error("SMTP test error:", error);
+    return {
+      success: false,
+      error: error.message || "Failed to connect to email server",
+    };
+  }
 };
 
 export const replaceVariables = (template, variables) => {
@@ -71,8 +123,10 @@ export const sendEmail = async ({
   body,
   attachments = [],
   trackingId = null,
+  senderEmail,
+  appPassword,
 }) => {
-  const transporter = createTransporter();
+  const transporter = createTransporter(senderEmail, appPassword);
 
   // Convert markdown to HTML
   let htmlBody = markdownToHtml(body);
@@ -87,11 +141,11 @@ export const sendEmail = async ({
   const textBody = toPlainText(body);
 
   const mailOptions = {
-    from: `${process.env.GMAIL_USER}`,
+    from: senderEmail,
     to,
     subject,
-    text: textBody, // Plain text fallback
-    html: htmlBody, // Rich HTML content
+    text: textBody,
+    html: htmlBody,
     attachments,
   };
 

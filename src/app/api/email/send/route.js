@@ -1,7 +1,8 @@
+// src/app/api/email/send/route.js
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
-import { sendBulkEmails, replaceVariables } from "@/lib/email";
+import { sendBulkEmails, replaceVariables, decryptPassword } from "@/lib/email";
 import { generateTrackingId } from "@/lib/utils";
 
 export async function POST(request) {
@@ -62,6 +63,57 @@ export async function POST(request) {
     }
 
     console.log("User found:", user.id);
+
+    // Get user's email settings
+    const { data: userSettings, error: settingsError } = await supabaseAdmin
+      .from("user_settings")
+      .select(
+        "sender_email, encrypted_app_password, email_configured, email_verified"
+      )
+      .eq("user_id", user.id)
+      .single();
+
+    if (settingsError || !userSettings) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "User settings not found. Please configure your email settings first.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (
+      !userSettings.email_configured ||
+      !userSettings.sender_email ||
+      !userSettings.encrypted_app_password
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Email not configured. Please configure your email settings in the Settings page.",
+        },
+        { status: 400 }
+      );
+    }
+
+    // Decrypt the app password
+    let appPassword;
+    try {
+      appPassword = decryptPassword(userSettings.encrypted_app_password);
+    } catch (error) {
+      console.error("Password decryption error:", error);
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Error decrypting email credentials. Please reconfigure your email settings.",
+        },
+        { status: 500 }
+      );
+    }
 
     // Fetch template using admin client
     const { data: template, error: templateError } = await supabaseAdmin
@@ -127,6 +179,8 @@ export async function POST(request) {
             ]
           : [],
         trackingId,
+        senderEmail: userSettings.sender_email,
+        appPassword,
         metadata: {
           recipientName: recipient.name,
           templateId,
