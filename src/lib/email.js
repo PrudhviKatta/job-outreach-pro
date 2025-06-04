@@ -3,12 +3,14 @@ import nodemailer from "nodemailer";
 import crypto from "crypto";
 
 // Encryption utilities
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32); // 32 bytes key
+const ENCRYPTION_KEY =
+  process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString("hex");
 const ALGORITHM = "aes-256-cbc";
 
 export const encryptPassword = (password) => {
   const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipher(ALGORITHM, ENCRYPTION_KEY);
+  const key = Buffer.from(ENCRYPTION_KEY.slice(0, 64), "hex"); // Use first 32 bytes as hex
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
   let encrypted = cipher.update(password, "utf8", "hex");
   encrypted += cipher.final("hex");
   return iv.toString("hex") + ":" + encrypted;
@@ -18,7 +20,8 @@ export const decryptPassword = (encryptedPassword) => {
   const parts = encryptedPassword.split(":");
   const iv = Buffer.from(parts[0], "hex");
   const encryptedText = parts[1];
-  const decipher = crypto.createDecipher(ALGORITHM, ENCRYPTION_KEY);
+  const key = Buffer.from(ENCRYPTION_KEY.slice(0, 64), "hex"); // Use first 32 bytes as hex
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
   let decrypted = decipher.update(encryptedText, "hex", "utf8");
   decrypted += decipher.final("utf8");
   return decrypted;
