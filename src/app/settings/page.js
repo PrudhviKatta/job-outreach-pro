@@ -18,12 +18,12 @@ import toast from "react-hot-toast";
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState({
-    email_signature: "",
     default_resume_id: "",
-    send_delay_min: 2,
-    send_delay_max: 5,
+    send_delay_min: 8,
+    send_delay_max: 20,
     business_hours_only: true,
     follow_up_days: 3,
+    delay_preset: "moderate", // New field for preset selection
   });
   const [emailSettings, setEmailSettings] = useState({
     sender_email: "",
@@ -44,6 +44,7 @@ export default function SettingsPage() {
   const [testingConnection, setTestingConnection] = useState(false);
   const [resumeLabel, setResumeLabel] = useState("");
   const [showEmailForm, setShowEmailForm] = useState(false);
+  const [delayWarning, setDelayWarning] = useState("");
 
   useEffect(() => {
     fetchSettings();
@@ -106,6 +107,45 @@ export default function SettingsPage() {
       toast.error("Error loading settings");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Add these functions before handleSaveSettings
+  const validateDelaySettings = (min, max) => {
+    if (min < 3) {
+      return "🚨 Minimum too low - may look automated to email providers";
+    }
+    if (max > 60) {
+      return "⏰ High delays will make campaigns very slow";
+    }
+    if (min < 5 || max < 10) {
+      return "⚠️ Very fast sending may trigger spam filters";
+    }
+    if (max - min < 2) {
+      return "📊 Gap between min/max should be at least 2 seconds for randomness";
+    }
+    return "";
+  };
+
+  const handlePresetChange = (preset) => {
+    const presets = {
+      fast: { min: 3, max: 8 },
+      moderate: { min: 8, max: 20 },
+      conservative: { min: 20, max: 45 },
+      custom: { min: settings.send_delay_min, max: settings.send_delay_max },
+    };
+
+    setSettings({
+      ...settings,
+      delay_preset: preset,
+      send_delay_min: presets[preset].min,
+      send_delay_max: presets[preset].max,
+    });
+
+    if (preset !== "custom") {
+      setDelayWarning(
+        validateDelaySettings(presets[preset].min, presets[preset].max)
+      );
     }
   };
 
@@ -434,63 +474,174 @@ export default function SettingsPage() {
 
       {/* Email Settings */}
       <div className="bg-white p-6 rounded-lg shadow-md mb-8">
-        <h2 className="text-xl font-semibold mb-4">Email Settings</h2>
+        <h2 className="text-xl font-semibold mb-4">Email Sending Settings</h2>
 
-        <div className="space-y-4">
+        <div className="space-y-6">
+          {/* Delay Presets */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Email Signature
+            <label className="block text-sm font-medium text-gray-700 mb-3">
+              Email Sending Speed
             </label>
-            <textarea
-              value={settings.email_signature}
-              onChange={(e) =>
-                setSettings({ ...settings, email_signature: e.target.value })
-              }
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-              rows="4"
-              placeholder="Best regards,&#10;Your Name&#10;Your Title&#10;Phone: xxx-xxx-xxxx"
-            />
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 gap-3">
+                <label className="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="delay_preset"
+                    value="fast"
+                    checked={settings.delay_preset === "fast"}
+                    onChange={(e) => handlePresetChange(e.target.value)}
+                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <div className="ml-3 flex-1">
+                    <div className="flex items-center">
+                      <span className="text-2xl mr-2">🚀</span>
+                      <span className="font-medium">Fast (3-8 seconds)</span>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-1">
+                      Quick sending, minimal delays
+                    </p>
+                  </div>
+                </label>
+
+                <label className="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="delay_preset"
+                    value="moderate"
+                    checked={settings.delay_preset === "moderate"}
+                    onChange={(e) => handlePresetChange(e.target.value)}
+                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <div className="ml-3 flex-1">
+                    <div className="flex items-center">
+                      <span className="text-2xl mr-2">⚡</span>
+                      <span className="font-medium">
+                        Moderate (8-20 seconds)
+                      </span>
+                      <span className="ml-2 px-2 py-1 bg-indigo-100 text-indigo-700 text-xs rounded-full">
+                        Recommended
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-1">
+                      Balanced speed and safety
+                    </p>
+                  </div>
+                </label>
+
+                <label className="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="delay_preset"
+                    value="conservative"
+                    checked={settings.delay_preset === "conservative"}
+                    onChange={(e) => handlePresetChange(e.target.value)}
+                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <div className="ml-3 flex-1">
+                    <div className="flex items-center">
+                      <span className="text-2xl mr-2">🛡️</span>
+                      <span className="font-medium">
+                        Conservative (20-45 seconds)
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-1">
+                      Extra cautious, very human-like
+                    </p>
+                  </div>
+                </label>
+
+                <label className="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="delay_preset"
+                    value="custom"
+                    checked={settings.delay_preset === "custom"}
+                    onChange={(e) => handlePresetChange(e.target.value)}
+                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <div className="ml-3 flex-1">
+                    <div className="flex items-center">
+                      <span className="text-2xl mr-2">⚙️</span>
+                      <span className="font-medium">Custom</span>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-1">
+                      Set your own range
+                    </p>
+                  </div>
+                </label>
+              </div>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Minimum Delay Between Emails (minutes)
-              </label>
-              <input
-                type="number"
-                value={settings.send_delay_min}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    send_delay_min: parseInt(e.target.value),
-                  })
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                min="1"
-                max="60"
-              />
-            </div>
+          {/* Custom Delay Inputs */}
+          {settings.delay_preset === "custom" && (
+            <div className="bg-gray-50 p-4 rounded-lg">
+              <h3 className="text-sm font-medium text-gray-700 mb-3">
+                Custom Delay Range
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Minimum Delay (seconds)
+                  </label>
+                  <input
+                    type="number"
+                    value={settings.send_delay_min}
+                    onChange={(e) => {
+                      const newMin = parseInt(e.target.value) || 0;
+                      setSettings({
+                        ...settings,
+                        send_delay_min: newMin,
+                      });
+                      setDelayWarning(
+                        validateDelaySettings(newMin, settings.send_delay_max)
+                      );
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                    min="3"
+                    max="60"
+                  />
+                </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Maximum Delay Between Emails (minutes)
-              </label>
-              <input
-                type="number"
-                value={settings.send_delay_max}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    send_delay_max: parseInt(e.target.value),
-                  })
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                min="1"
-                max="60"
-              />
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Maximum Delay (seconds)
+                  </label>
+                  <input
+                    type="number"
+                    value={settings.send_delay_max}
+                    onChange={(e) => {
+                      const newMax = parseInt(e.target.value) || 0;
+                      setSettings({
+                        ...settings,
+                        send_delay_max: newMax,
+                      });
+                      setDelayWarning(
+                        validateDelaySettings(settings.send_delay_min, newMax)
+                      );
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
+                    min="3"
+                    max="60"
+                  />
+                </div>
+              </div>
+
+              <p className="text-xs text-gray-500 mt-2">
+                Range: 3-60 seconds. Random delay will be picked between your
+                min and max values.
+              </p>
             </div>
-          </div>
+          )}
+
+          {/* Warning Message */}
+          {delayWarning && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+              <p className="text-yellow-800 text-sm">{delayWarning}</p>
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">

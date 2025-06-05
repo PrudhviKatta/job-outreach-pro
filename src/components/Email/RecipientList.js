@@ -21,16 +21,22 @@ export default function RecipientList({
   currentlySending = null,
   sentRecipients = [],
   failedRecipients = [],
-  sendingProgress = { sent: 0, failed: 0, total: 0 },
+  campaignProgress = { sent: 0, failed: 0, total: 0 },
   onRetryFailed = () => {},
   onPauseSending = () => {},
   onResumeSending = () => {},
   isPaused = false,
+  currentDelayInfo = null,
+  // New campaign-related props
+  campaignStatus = null,
+  onStopSending = () => {},
+  shouldStop = false,
+  forceStop = false,
 }) {
   const totalRecipients =
-    sendingProgress.total ||
+    campaignProgress.total ||
     recipients.length + sentRecipients.length + failedRecipients.length;
-  const completedCount = sendingProgress.sent + sendingProgress.failed;
+  const completedCount = campaignProgress.sent + campaignProgress.failed;
   const progressPercentage =
     totalRecipients > 0 ? (completedCount / totalRecipients) * 100 : 0;
 
@@ -43,12 +49,12 @@ export default function RecipientList({
             <span className="flex items-center text-green-600">
               <CheckCircle className="w-4 h-4 mr-1" />
               Sent:{" "}
-              <span className="font-bold ml-1">{sendingProgress.sent}</span>
+              <span className="font-bold ml-1">{campaignProgress.sent}</span>
             </span>
             <span className="flex items-center text-red-600">
               <XCircle className="w-4 h-4 mr-1" />
               Failed:{" "}
-              <span className="font-bold ml-1">{sendingProgress.failed}</span>
+              <span className="font-bold ml-1">{campaignProgress.failed}</span>
             </span>
             <span className="flex items-center text-blue-600">
               <Clock className="w-4 h-4 mr-1" />
@@ -111,6 +117,23 @@ export default function RecipientList({
                 <div className="w-2 h-2 bg-blue-600 rounded-full animate-pulse mr-2"></div>
                 {isPaused ? "Paused" : "Sending..."}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add this new section for delay info */}
+      {currentDelayInfo && !currentlySending && (
+        <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-4">
+          <div className="flex items-center">
+            <div className="animate-pulse mr-3">
+              <Clock className="w-5 h-5 text-orange-600" />
+            </div>
+            <div className="flex-1">
+              <p className="font-medium text-orange-900">
+                Delay between emails
+              </p>
+              <p className="text-sm text-orange-700">{currentDelayInfo}</p>
             </div>
           </div>
         </div>
@@ -291,6 +314,15 @@ export default function RecipientList({
                   Pause
                 </>
               )}
+            </Button>
+
+            <Button
+              onClick={onStopSending}
+              variant="danger"
+              className="flex items-center"
+            >
+              <XCircle className="w-4 h-4 mr-2" />
+              Stop Campaign
             </Button>
 
             {failedRecipients.length > 0 && (
