@@ -10,7 +10,7 @@ import {
   Pause,
   Play,
   Zap,
-  Timer,
+  Calendar,
   Info,
 } from "lucide-react";
 
@@ -45,25 +45,43 @@ export default function RecipientList({
   const progressPercentage =
     totalRecipients > 0 ? (completedCount / totalRecipients) * 100 : 0;
 
-  // NEW: Check if we can send immediately (20 recipient limit)
+  // Check if we can send immediately (20 recipient limit)
   const canSendImmediately = recipients.length <= 20 && recipients.length > 0;
   const needsBackgroundSending = recipients.length > 20;
 
-  // NEW: Calculate estimated completion time for background sending
+  // Calculate estimated completion time for daily processing
   const estimateBackgroundTime = (recipientCount) => {
     if (recipientCount === 0) return null;
 
-    // Average 14 seconds between emails (8-20 range)
-    const avgDelaySeconds = 14;
-    const totalSeconds = recipientCount * avgDelaySeconds;
+    // With daily processing, estimate days needed
+    const batchSize = 50; // Conservative batch size for daily processing
+    const daysNeeded = Math.ceil(recipientCount / batchSize);
 
-    if (totalSeconds < 3600) {
-      const minutes = Math.ceil(totalSeconds / 60);
-      return `~${minutes} minutes`;
+    if (daysNeeded === 1) {
+      return "1 day";
     } else {
-      const hours = Math.ceil(totalSeconds / 3600);
-      return `~${hours} hours`;
+      return `${daysNeeded} days`;
     }
+  };
+
+  // Get next processing time (9 AM daily)
+  const getNextProcessingTime = () => {
+    const now = new Date();
+    const next = new Date();
+    next.setHours(9, 0, 0, 0); // 9 AM
+
+    // If it's past 9 AM today, schedule for tomorrow
+    if (now.getTime() > next.getTime()) {
+      next.setDate(next.getDate() + 1);
+    }
+
+    return next.toLocaleDateString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
   };
 
   return (
@@ -118,7 +136,7 @@ export default function RecipientList({
         </div>
       )}
 
-      {/* NEW: Recipient Count Warning/Info */}
+      {/* UPDATED: Recipient Count Warning/Info for Daily Processing */}
       {recipients.length > 0 && !sending && (
         <div
           className={`rounded-lg p-4 mb-4 ${
@@ -131,7 +149,7 @@ export default function RecipientList({
         >
           <div className="flex items-start">
             {needsBackgroundSending ? (
-              <Timer className="w-5 h-5 text-orange-600 mt-0.5 mr-3" />
+              <Calendar className="w-5 h-5 text-orange-600 mt-0.5 mr-3" />
             ) : recipients.length > 15 ? (
               <Info className="w-5 h-5 text-yellow-600 mt-0.5 mr-3" />
             ) : (
@@ -141,16 +159,19 @@ export default function RecipientList({
               {needsBackgroundSending ? (
                 <>
                   <h3 className="font-medium text-orange-900">
-                    Background Sending Required
+                    Daily Queue Processing Required
                   </h3>
                   <p className="text-orange-800 text-sm mt-1">
                     {recipients.length} recipients exceed the 20-email limit for
-                    immediate sending. This campaign will be queued for
-                    background processing.
+                    immediate sending. This campaign will be processed daily at
+                    9 AM.
                   </p>
                   <p className="text-orange-700 text-xs mt-2">
                     📅 Estimated completion:{" "}
                     {estimateBackgroundTime(recipients.length)}
+                  </p>
+                  <p className="text-orange-600 text-xs mt-1">
+                    ⏰ Next processing: {getNextProcessingTime()}
                   </p>
                 </>
               ) : recipients.length > 15 ? (
@@ -160,8 +181,7 @@ export default function RecipientList({
                   </h3>
                   <p className="text-yellow-800 text-sm mt-1">
                     {recipients.length}/20 recipients. You can still send
-                    immediately, but consider background sending for larger
-                    campaigns.
+                    immediately, but consider daily queue for larger campaigns.
                   </p>
                 </>
               ) : (
@@ -369,16 +389,16 @@ export default function RecipientList({
           </p>
         )}
 
-      {/* NEW: Updated Control Buttons */}
+      {/* UPDATED: Control Buttons with Daily Processing Info */}
       <div className="pt-4 border-t">
         {showMethodSelection ? (
-          // Method selection UI - UPDATED
+          // Method selection UI - UPDATED for daily processing
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-gray-900">
               Choose Sending Method
             </h3>
 
-            {/* Send Now Option - UPDATED */}
+            {/* Send Now Option */}
             <div
               className={`border-2 rounded-lg p-4 transition-all ${
                 canSendImmediately
@@ -416,11 +436,11 @@ export default function RecipientList({
               </div>
             </div>
 
-            {/* Send in Background Option - UPDATED */}
+            {/* Daily Queue Option - UPDATED */}
             <div
               className={`border-2 rounded-lg p-4 transition-all ${
                 recipients.length <= 500 && recipients.length > 0
-                  ? "border-green-200 hover:bg-green-50 cursor-pointer hover:border-green-300"
+                  ? "border-orange-200 hover:bg-orange-50 cursor-pointer hover:border-orange-300"
                   : "border-gray-200 bg-gray-50 opacity-60 cursor-not-allowed"
               }`}
               onClick={() =>
@@ -430,20 +450,19 @@ export default function RecipientList({
               }
             >
               <div className="flex items-start">
-                <div className="text-2xl mr-3">🔄</div>
+                <div className="text-2xl mr-3">📅</div>
                 <div className="flex-1">
                   <h4 className="font-semibold text-gray-900">
-                    Send in Background {needsBackgroundSending && "(Required)"}
+                    Daily Queue {needsBackgroundSending && "(Required)"}
                   </h4>
                   <p className="text-sm text-gray-600 mt-1">
-                    Works even when you close browser. Queued with other
-                    campaigns.
+                    Processed once daily at 9 AM. Perfect for large campaigns.
                   </p>
                   <div className="mt-2 flex items-center space-x-4 text-xs">
                     <span
                       className={`px-2 py-1 rounded-full ${
                         recipients.length <= 500 && recipients.length > 0
-                          ? "bg-green-100 text-green-700"
+                          ? "bg-orange-100 text-orange-700"
                           : "bg-red-100 text-red-700"
                       }`}
                     >
@@ -458,6 +477,11 @@ export default function RecipientList({
                       </span>
                     )}
                   </div>
+                  {recipients.length > 0 && (
+                    <div className="mt-2 text-xs text-orange-700">
+                      ⏰ Next processing: {getNextProcessingTime()}
+                    </div>
+                  )}
                   {needsBackgroundSending && (
                     <div className="mt-2 text-xs text-orange-700 font-medium">
                       ⚠️ Required for campaigns over 20 recipients
@@ -467,19 +491,27 @@ export default function RecipientList({
               </div>
             </div>
 
-            {/* NEW: Help text */}
+            {/* UPDATED: Help text for daily processing */}
             <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-600">
               <p className="font-medium mb-1">
-                💡 Which method should I choose?
+                💡 Understanding Daily Processing:
               </p>
               <ul className="space-y-1 text-xs">
                 <li>
-                  • <strong>Send Now:</strong> Best for quick, urgent emails to
-                  individuals
+                  • <strong>Send Now:</strong> Perfect for urgent emails (≤20
+                  recipients)
                 </li>
                 <li>
-                  • <strong>Background:</strong> Best for bulk campaigns, runs
-                  automatically
+                  • <strong>Daily Queue:</strong> Processes 50-100 emails per
+                  day at 9 AM
+                </li>
+                <li>
+                  • <strong>Cost-effective:</strong> Works with free Vercel
+                  Hobby plan
+                </li>
+                <li>
+                  • <strong>Reliable:</strong> Campaigns continue even if you
+                  close browser
                 </li>
               </ul>
             </div>

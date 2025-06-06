@@ -10,11 +10,7 @@
   "crons": [
     {
       "path": "/api/cron/process-emails",
-      "schedule": "* * * * *"
-    },
-    {
-      "path": "/api/cleanup",
-      "schedule": "0 2 * * 0"
+      "schedule": "0 9 * * *"
     }
   ]
 }
