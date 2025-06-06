@@ -195,22 +195,29 @@ export async function GET(request) {
       .from("email_campaigns")
       .select(
         `
+      id,
+      name,
+      template_id,
+      resume_id,
+      status,
+      created_at,
+      campaign_recipients!inner (
         id,
         name,
-        template_id,
-        resume_id,
-        status,
-        campaign_recipients (
-          id,
-          name,
-          email,
-          company,
-          position
-        )
-      `
+        email,
+        company,
+        position,
+        status
+      )
+    `
       )
       .eq("user_id", user.id)
       .eq("status", "draft")
+      .eq("campaign_recipients.status", "pending")
+      .gte(
+        "created_at",
+        new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      ) // Only drafts from last 24 hours
       .single();
 
     if (draftError || !draft) {

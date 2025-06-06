@@ -17,6 +17,7 @@ export default function EmailPage() {
   const [selectedResume, setSelectedResume] = useState("");
   const [loading, setLoading] = useState(true);
   const [emailConfigured, setEmailConfigured] = useState(false);
+  const [dailyEmailCount, setDailyEmailCount] = useState(0);
 
   // Campaign management
   const [campaignId, setCampaignId] = useState(null);
@@ -42,6 +43,68 @@ export default function EmailPage() {
 
   // Real-time updates
   const [statusPolling, setStatusPolling] = useState(null);
+  const [draftLoaded, setDraftLoaded] = useState(false);
+
+  // Load existing draft on page load - FIXED VERSION
+  const loadDraft = useCallback(async () => {
+    // ✅ PREVENT MULTIPLE CALLS
+    if (draftLoaded) {
+      console.log("Draft already loaded, skipping");
+      return;
+    }
+
+    // ✅ SET FLAG IMMEDIATELY to prevent race conditions
+    setDraftLoaded(true);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) return;
+
+      const response = await fetch("/api/campaigns/draft", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+        },
+      });
+
+      const data = await response.json();
+
+      if (data.success && data.draft) {
+        const { campaignId, campaignName, templateId, resumeId, recipients } =
+          data.draft;
+
+        console.log("📥 Loading draft from database:", {
+          campaignName: campaignName || "Unnamed campaign",
+          recipientCount: recipients?.length || 0,
+          recipients:
+            recipients?.map((r) => ({ id: r.id, email: r.email })) || [],
+        });
+
+        // Restore the draft state
+        setCampaignId(campaignId);
+        setSelectedTemplate(templateId || "");
+        setSelectedResume(resumeId || "");
+        setRecipients(recipients || []);
+
+        console.log("Draft loaded:", campaignName || "Unnamed campaign");
+        toast.success("Previous draft restored!");
+
+        // Check if there's an active campaign after loading draft
+        if (campaignId) {
+          checkCampaignStatus(campaignId, session);
+        }
+      } else {
+        console.log("📭 No draft found in database");
+      }
+    } catch (error) {
+      console.error("Error loading draft:", error);
+      // ✅ RESET FLAG ON ERROR so it can be retried
+      setDraftLoaded(false);
+    }
+  }, [draftLoaded]); // ✅ Include draftLoaded in dependencies
 
   const fetchData = useCallback(async () => {
     try {
@@ -59,6 +122,18 @@ export default function EmailPage() {
       if (emailResponse.ok) {
         const emailData = await emailResponse.json();
         setEmailConfigured(emailData.data?.email_configured || false);
+      }
+
+      // Fetch daily email count
+      const dailyCountResponse = await fetch("/api/campaigns/daily-count", {
+        headers: {
+          Authorization: `Bearer ${session?.access_token}`,
+        },
+      });
+
+      if (dailyCountResponse.ok) {
+        const dailyData = await dailyCountResponse.json();
+        setDailyEmailCount(dailyData.count || 0);
       }
 
       // Fetch templates
@@ -81,7 +156,7 @@ export default function EmailPage() {
       if (resumesError) throw resumesError;
       setResumes(resumesData || []);
 
-      // Load existing draft
+      // ✅ ONLY LOAD DRAFT ONCE, AFTER OTHER DATA IS LOADED
       await loadDraft();
     } catch (error) {
       toast.error("Error loading data");
@@ -89,15 +164,24 @@ export default function EmailPage() {
     } finally {
       setLoading(false);
     }
-  }, []); // Empty dependency array since this function doesn't depend on any state
+  }, [loadDraft]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  // Auto-save draft when recipients change
-  // Auto-save draft when recipients change
+  // ✅ IMPROVED Auto-save draft when recipients change
   const saveDraft = useCallback(async () => {
+    // DON'T auto-save during active campaigns
+    if (
+      sending ||
+      campaignStatus === "sending" ||
+      campaignStatus === "paused"
+    ) {
+      console.log("Skipping auto-save: campaign is active");
+      return;
+    }
+
     if (!selectedTemplate || recipients.length === 0) return;
 
     try {
@@ -130,55 +214,133 @@ export default function EmailPage() {
     } catch (error) {
       console.error("Error saving draft:", error);
     }
-  }, [selectedTemplate, selectedResume, recipients]);
+  }, [selectedTemplate, selectedResume, recipients, sending, campaignStatus]);
 
-  // Auto-save when recipients or template changes
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      saveDraft();
-    }, 1000); // Save 1 second after changes stop
+  // ✅ IMPROVED Helper function to save draft with specific recipients
+  const saveDraftWithRecipients = useCallback(
+    async (recipientsList) => {
+      // DON'T save during active campaigns
+      if (
+        sending ||
+        campaignStatus === "sending" ||
+        campaignStatus === "paused"
+      ) {
+        console.log("Skipping save: campaign is active");
+        return;
+      }
 
-    return () => clearTimeout(timeoutId);
-  }, [saveDraft]);
+      if (!selectedTemplate || recipientsList.length === 0) {
+        return;
+      }
 
-  // Load existing draft on page load
-  const loadDraft = async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!session) return;
+
+        const response = await fetch("/api/campaigns/draft", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({
+            templateId: selectedTemplate,
+            resumeId: selectedResume,
+            recipients: recipientsList,
+            campaignName: null,
+          }),
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          setCampaignId(data.campaignId);
+          console.log("Draft saved immediately");
+        }
+      } catch (error) {
+        console.error("Error saving draft immediately:", error);
+      }
+    },
+    [selectedTemplate, selectedResume, sending, campaignStatus]
+  );
+
+  // NEW: Function to check campaign status and resume polling if needed
+  const checkCampaignStatus = async (campaignId, session) => {
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) return;
-
-      const response = await fetch("/api/campaigns/draft", {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      });
+      const response = await fetch(
+        `/api/campaigns/status?campaignId=${campaignId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        }
+      );
 
       const data = await response.json();
 
-      if (data.success && data.draft) {
-        const { campaignId, campaignName, templateId, resumeId, recipients } =
-          data.draft;
+      if (data.success) {
+        const { campaign } = data;
 
-        // Restore the draft state
-        setCampaignId(campaignId);
-        setSelectedTemplate(templateId || "");
-        setSelectedResume(resumeId || "");
-        setRecipients(recipients || []);
+        // Update all states based on current campaign status
+        setCampaignStatus(campaign.status);
+        setCampaignProgress(campaign.progress);
+        setCurrentlySending(campaign.currentlySending);
+        setSentRecipients(campaign.recipients.sent || []);
+        setFailedRecipients(campaign.recipients.failed || []);
+        setRecipients(campaign.recipients.pending || []);
 
-        console.log("Draft loaded:", campaignName || "Unnamed campaign");
-        toast.success("Previous draft restored!");
+        // If campaign is actively running, start polling and email loop
+        if (campaign.status === "sending" || campaign.status === "paused") {
+          setSending(true);
+          setIsPaused(campaign.status === "paused");
+          startStatusPolling();
+
+          if (campaign.status === "sending") {
+            toast.info("Resuming campaign monitoring...");
+          } else {
+            toast.info("Campaign is paused - you can resume it");
+          }
+        } else if (campaign.status === "completed") {
+          toast.success(
+            `Campaign completed: ${campaign.progress.sent} sent, ${campaign.progress.failed} failed`
+          );
+        } else if (campaign.status === "cancelled") {
+          toast.info("Campaign was previously cancelled");
+        }
       }
     } catch (error) {
-      console.error("Error loading draft:", error);
+      console.error("Error checking campaign status:", error);
     }
   };
 
-  const handleAddRecipient = (recipient) => {
-    setRecipients([...recipients, { ...recipient, id: Date.now() }]);
+  // Add this new function alongside handleAddRecipient
+  const handleBulkAdd = async (newRecipients) => {
+    console.log(`🏠 Page: Bulk adding ${newRecipients.length} recipients`);
+
+    // Add all recipients to state at once
+    const updatedRecipients = [...recipients, ...newRecipients];
+    setRecipients(updatedRecipients);
+
+    // Save to database ONCE with all recipients
+    await saveDraftWithRecipients(updatedRecipients);
+
+    console.log(
+      `✅ Bulk add complete: ${updatedRecipients.length} total recipients`
+    );
+  };
+
+  const handleAddRecipient = async (recipient) => {
+    const newRecipient = { ...recipient, id: Date.now() };
+    const updatedRecipients = [...recipients, newRecipient];
+
+    // Update UI immediately
+    setRecipients(updatedRecipients);
+
+    // Save to database immediately
+    await saveDraftWithRecipients(updatedRecipients);
   };
 
   const handleSendEmails = async () => {
@@ -229,7 +391,7 @@ export default function EmailPage() {
         toast.success("Campaign started successfully!");
         setCampaignStatus("sending");
 
-        // Start polling for status updates
+        // Start the campaign loop and status polling
         startStatusPolling();
       } else {
         toast.error(data.error || "Failed to start campaign");
@@ -242,90 +404,242 @@ export default function EmailPage() {
     }
   };
 
-  // Start polling for campaign status updates
-  const startStatusPolling = () => {
+  const refreshCampaignStatus = useCallback(async () => {
+    if (!campaignId) return;
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) return;
+
+      const response = await fetch(
+        `/api/campaigns/status?campaignId=${campaignId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        }
+      );
+
+      const data = await response.json();
+
+      if (data.success) {
+        const { campaign } = data;
+
+        // ✅ CLEAN SLATE: When campaign is completed
+        if (
+          campaign.status === "completed" ||
+          campaign.status === "cancelled"
+        ) {
+          console.log("🧹 Campaign completed - cleaning slate");
+
+          // Stop polling by clearing the interval directly
+          if (statusPolling) {
+            clearInterval(statusPolling);
+            setStatusPolling(null);
+          }
+
+          // Reset all campaign states
+          setSending(false);
+          setCurrentlySending(null);
+          setCurrentDelayInfo(null);
+          setSentRecipients([]);
+          setFailedRecipients([]);
+          setRecipients([]); // This allows fresh start
+          setCampaignId(null);
+          setCampaignStatus(null);
+          setCampaignProgress({ sent: 0, failed: 0, total: 0 });
+
+          // Show completion message
+          if (campaign.status === "completed") {
+            toast.success(
+              `✅ Campaign completed: ${campaign.progress.sent} sent, ${campaign.progress.failed} failed`
+            );
+          } else {
+            toast.info("Campaign was cancelled");
+          }
+
+          return; // Don't update with old data
+        }
+
+        // Normal status updates for active campaigns
+        setCampaignStatus(campaign.status);
+        setCampaignProgress(campaign.progress);
+        setSentRecipients(campaign.recipients.sent || []);
+        setFailedRecipients(campaign.recipients.failed || []);
+        if (campaign.status === "sending" || campaign.status === "paused") {
+          setRecipients(campaign.recipients.pending || []);
+        }
+      }
+    } catch (error) {
+      console.error("Status refresh error:", error);
+    }
+  }, [campaignId, statusPolling]);
+
+  // Start the campaign loop - sends emails with delays
+  const startCampaignLoop = useCallback(async () => {
+    if (!campaignId) return;
+
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+
+    if (!session) {
+      toast.error("Session expired, please login again");
+      return;
+    }
+
+    const continueLoop = async () => {
+      // Check if campaign should continue
+      if (
+        shouldStop ||
+        campaignStatus === "paused" ||
+        campaignStatus === "cancelled"
+      ) {
+        console.log("Campaign loop stopped:", { shouldStop, campaignStatus });
+        return;
+      }
+
+      try {
+        // Send next email
+        const response = await fetch("/api/campaigns/continue", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+          },
+          body: JSON.stringify({ campaignId }),
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          if (data.sentTo) {
+            console.log(`Email sent to: ${data.sentTo.email}`);
+            setCurrentlySending(data.sentTo);
+
+            // Brief moment to show "currently sending"
+            setTimeout(() => {
+              setCurrentlySending(null);
+            }, 1000);
+          }
+
+          // Refresh status to get updated recipient lists
+          await refreshCampaignStatus();
+
+          if (
+            data.shouldContinue &&
+            campaignStatus === "sending" &&
+            !shouldStop
+          ) {
+            // Calculate delay
+            const minDelay = 8000; // 8 seconds default
+            const maxDelay = 20000; // 20 seconds default
+            const randomDelay =
+              Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+
+            setCurrentDelayInfo(
+              `Waiting ${Math.round(
+                randomDelay / 1000
+              )} seconds before next email...`
+            );
+
+            // Wait before sending next email
+            setTimeout(() => {
+              setCurrentDelayInfo(null);
+              continueLoop(); // Recursive call for next email
+            }, randomDelay);
+          } else {
+            // Campaign finished or should stop
+            setSending(false);
+            setCurrentlySending(null);
+            setCurrentDelayInfo(null);
+
+            if (!data.shouldContinue) {
+              toast.success("Campaign completed successfully!");
+            }
+          }
+        } else {
+          console.error("Continue campaign error:", data.error);
+          setSending(false);
+          setCurrentlySending(null);
+          toast.error(data.error || "Error continuing campaign");
+        }
+      } catch (error) {
+        console.error("Campaign loop error:", error);
+        setSending(false);
+        setCurrentlySending(null);
+        toast.error("Error in campaign loop");
+      }
+    };
+
+    // Start the loop
+    continueLoop();
+  }, [campaignId, shouldStop, campaignStatus, refreshCampaignStatus]);
+
+  // Start polling for campaign status updates (lighter polling for UI updates)
+  const startStatusPolling = useCallback(() => {
+    // Clear any existing polling first
     if (statusPolling) {
       clearInterval(statusPolling);
     }
 
     const pollInterval = setInterval(async () => {
-      if (!campaignId) {
-        clearInterval(pollInterval);
-        return;
-      }
-
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
-        if (!session) {
-          clearInterval(pollInterval);
-          return;
-        }
-
-        const response = await fetch(
-          `/api/campaigns/status?campaignId=${campaignId}`,
-          {
-            headers: {
-              Authorization: `Bearer ${session.access_token}`,
-            },
-          }
-        );
-
-        const data = await response.json();
-
-        if (data.success) {
-          const { campaign } = data;
-
-          // Update campaign status
-          setCampaignStatus(campaign.status);
-          setCampaignProgress(campaign.progress);
-          setCurrentlySending(campaign.currentlySending);
-
-          // Update recipient lists
-          setSentRecipients(campaign.recipients.sent || []);
-          setFailedRecipients(campaign.recipients.failed || []);
-          setRecipients(campaign.recipients.pending || []);
-
-          // Check if campaign is complete
-          if (
-            campaign.status === "completed" ||
-            campaign.status === "cancelled"
-          ) {
-            clearInterval(pollInterval);
-            setSending(false);
-            setCurrentlySending(null);
-
-            if (campaign.status === "completed") {
-              toast.success(
-                `Campaign completed: ${campaign.progress.sent} sent, ${campaign.progress.failed} failed`
-              );
-            } else {
-              toast.info("Campaign was cancelled");
-            }
-          }
-        }
-      } catch (error) {
-        console.error("Status polling error:", error);
-      }
-    }, 2000); // Poll every 2 seconds
+      await refreshCampaignStatus();
+    }, 3000); // Poll every 3 seconds for status updates
 
     setStatusPolling(pollInterval);
-  };
+  }, [campaignId]);
 
   // Stop status polling
-  const stopStatusPolling = () => {
+  const stopStatusPolling = useCallback(() => {
     if (statusPolling) {
       clearInterval(statusPolling);
       setStatusPolling(null);
     }
-  };
+  }, [statusPolling]);
+
+  // NEW: Handle page visibility changes (tab switching)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        // Tab became visible again
+        if (
+          campaignId &&
+          (campaignStatus === "sending" || campaignStatus === "paused")
+        ) {
+          console.log("Tab visible again, checking campaign status...");
+
+          // Re-check campaign status when tab becomes visible
+          const recheckStatus = async () => {
+            const {
+              data: { session },
+            } = await supabase.auth.getSession();
+            if (session) {
+              await checkCampaignStatus(campaignId, session);
+            }
+          };
+
+          recheckStatus();
+        }
+      } else {
+        // Tab became hidden - we can keep polling in background
+        console.log("Tab hidden, polling continues in background");
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [campaignId, campaignStatus]);
 
   // Cleanup polling on unmount
   useEffect(() => {
     return () => stopStatusPolling();
-  }, []);
+  }, [stopStatusPolling]);
 
   const handlePauseSending = async () => {
     setIsPaused(true);
@@ -456,18 +770,89 @@ export default function EmailPage() {
     toast.info(`${failedList.length} recipients moved back to queue`);
   };
 
-  const handleRemoveRecipient = (id) => {
-    if (id.toString().startsWith("failed-")) {
-      // Remove from failed list
-      const actualId = id.replace("failed-", "");
-      setFailedRecipients((prev) =>
-        prev.filter((r) => r.id.toString() !== actualId)
-      );
-    } else {
-      // Remove from main recipients list
-      setRecipients((prev) => prev.filter((r) => r.id !== id));
+  const handleSendMethodSelect = (method) => {
+    if (method === "realtime") {
+      handleSendEmails();
+    } else if (method === "background") {
+      handleSendInBackground();
     }
   };
+
+  const handleSendInBackground = async () => {
+    // TODO: Implement background sending
+    toast.info("Background sending will be implemented in the next step!");
+    console.log(
+      "Background sending selected with",
+      recipients.length,
+      "recipients"
+    );
+  };
+
+  // ✅ FIXED Remove recipient function
+  const handleRemoveRecipient = useCallback(
+    async (id) => {
+      // DON'T allow removal during active campaigns
+      if (
+        sending ||
+        campaignStatus === "sending" ||
+        campaignStatus === "paused"
+      ) {
+        toast.error("Cannot remove recipients during active campaign");
+        return;
+      }
+
+      if (id.toString().startsWith("failed-")) {
+        // Remove from failed list
+        const actualId = id.replace("failed-", "");
+        setFailedRecipients((prev) =>
+          prev.filter((r) => r.id.toString() !== actualId)
+        );
+      } else {
+        // Remove from main recipients list
+        const updatedRecipients = recipients.filter((r) => r.id !== id);
+        setRecipients(updatedRecipients);
+
+        // 🔥 FORCE SAVE TO DATABASE IMMEDIATELY
+        console.log(
+          `🗑️ Removing recipient ${id}, saving ${updatedRecipients.length} recipients to database`
+        );
+
+        try {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          if (!session) return;
+
+          const response = await fetch("/api/campaigns/draft", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({
+              templateId: selectedTemplate,
+              resumeId: selectedResume,
+              recipients: updatedRecipients,
+              campaignName: null,
+            }),
+          });
+
+          const data = await response.json();
+          if (data.success) {
+            console.log("✅ Recipients deletion saved to database");
+            toast.success("Recipient removed");
+          } else {
+            console.error("❌ Failed to save deletion to database");
+            toast.error("Failed to save changes");
+          }
+        } catch (error) {
+          console.error("❌ Error saving deletion:", error);
+          toast.error("Error saving changes");
+        }
+      }
+    },
+    [recipients, sending, campaignStatus, selectedTemplate, selectedResume]
+  );
 
   if (!emailConfigured) {
     return (
@@ -513,6 +898,8 @@ export default function EmailPage() {
             onResumeChange={setSelectedResume}
             onAddRecipient={handleAddRecipient}
             loading={loading}
+            dailyEmailCount={dailyEmailCount}
+            onBulkAdd={handleBulkAdd}
           />
         </div>
 
@@ -536,6 +923,9 @@ export default function EmailPage() {
             onStopSending={handleStopSending}
             shouldStop={shouldStop}
             forceStop={forceStop}
+            // New props for sending method selection
+            onSendMethodSelect={handleSendMethodSelect}
+            showMethodSelection={recipients.length > 0 && !sending}
           />
         </div>
       </div>

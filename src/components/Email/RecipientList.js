@@ -32,6 +32,8 @@ export default function RecipientList({
   onStopSending = () => {},
   shouldStop = false,
   forceStop = false,
+  onSendMethodSelect = () => {},
+  showMethodSelection = false,
 }) {
   const totalRecipients =
     campaignProgress.total ||
@@ -285,23 +287,76 @@ export default function RecipientList({
         )}
 
       {/* Control Buttons */}
-      <div className="flex space-x-3 pt-4 border-t">
-        {!sending && recipients.length > 0 && (
-          <Button
-            onClick={onSend}
-            className="flex items-center justify-center flex-1"
-          >
-            <Send className="w-4 h-4 mr-2" />
-            Send All Emails
-          </Button>
-        )}
+      <div className="pt-4 border-t">
+        {showMethodSelection ? (
+          // Method selection UI
+          <div className="space-y-4">
+            <h3 className="text-lg font-semibold text-gray-900">
+              Choose Sending Method
+            </h3>
 
-        {sending && (
-          <>
+            {/* Send Now Option */}
+            <div
+              className={`border-2 rounded-lg p-4 cursor-pointer ${
+                recipients.length <= 20
+                  ? "border-indigo-200 hover:bg-indigo-50"
+                  : "border-gray-200 bg-gray-50 opacity-60"
+              }`}
+              onClick={() =>
+                recipients.length <= 20 && onSendMethodSelect("realtime")
+              }
+            >
+              <div className="flex items-start">
+                <div className="text-2xl mr-3">🚀</div>
+                <div>
+                  <h4 className="font-semibold">Send Now</h4>
+                  <p className="text-sm text-gray-600">
+                    Perfect for urgent, small campaigns
+                  </p>
+                  <p className="text-sm text-indigo-600 mt-1">
+                    Limit: 20 emails{" "}
+                    {recipients.length <= 20
+                      ? "✓"
+                      : `(you have ${recipients.length})`}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Send in Background Option */}
+            <div
+              className={`border-2 rounded-lg p-4 cursor-pointer ${
+                recipients.length <= 500
+                  ? "border-green-200 hover:bg-green-50"
+                  : "border-gray-200 bg-gray-50 opacity-60"
+              }`}
+              onClick={() =>
+                recipients.length <= 500 && onSendMethodSelect("background")
+              }
+            >
+              <div className="flex items-start">
+                <div className="text-2xl mr-3">🔄</div>
+                <div>
+                  <h4 className="font-semibold">Send in Background</h4>
+                  <p className="text-sm text-gray-600">
+                    Works even when you close browser
+                  </p>
+                  <p className="text-sm text-green-600 mt-1">
+                    Limit: 500 emails{" "}
+                    {recipients.length <= 500
+                      ? "✓"
+                      : `(you have ${recipients.length})`}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : sending ? (
+          // Existing campaign controls when sending
+          <div className="flex space-x-3">
             <Button
               onClick={isPaused ? onResumeSending : onPauseSending}
               variant="secondary"
-              className="flex items-center"
             >
               {isPaused ? (
                 <>
@@ -315,29 +370,12 @@ export default function RecipientList({
                 </>
               )}
             </Button>
-
-            <Button
-              onClick={onStopSending}
-              variant="danger"
-              className="flex items-center"
-            >
+            <Button onClick={onStopSending} variant="danger">
               <XCircle className="w-4 h-4 mr-2" />
-              Stop Campaign
+              Stop
             </Button>
-
-            {failedRecipients.length > 0 && (
-              <Button
-                onClick={() => onRetryFailed(failedRecipients)}
-                variant="warning"
-                className="flex items-center"
-                disabled={isPaused}
-              >
-                <RefreshCw className="w-4 h-4 mr-2" />
-                Retry Failed ({failedRecipients.length})
-              </Button>
-            )}
-          </>
-        )}
+          </div>
+        ) : null}
       </div>
     </div>
   );
