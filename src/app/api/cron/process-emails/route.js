@@ -1,4 +1,4 @@
-// src/app/api/cron/process-emails/route.js
+// src/app/api/cron/process-emails/route.js - FIXED VERSION
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { sendEmail, replaceVariables, decryptPassword } from "@/lib/email";
@@ -77,17 +77,27 @@ export async function GET(request) {
           continue;
         }
 
-        // Calculate batch size based on user's delay settings
-        const avgDelay =
-          (userSettings.send_delay_min + userSettings.send_delay_max) / 2;
-        const maxTimePerBatch = 50; // seconds (leave buffer for cron)
-        const batchSize = Math.max(
-          1,
-          Math.min(10, Math.floor(maxTimePerBatch / avgDelay))
-        );
+        // ✅ FIXED: Calculate batch size for DAILY processing
+        // For daily cron jobs, we want to process a substantial number of emails
+        const DAILY_BATCH_SIZE = 75; // Process 75 emails per day
+        const MAX_CRON_TIME_MINUTES = 5; // Max 5 minutes of processing time
+
+        // Calculate if we can fit the desired batch in our time limit
+        const maxDelay = userSettings.send_delay_max || 20;
+        const maxTimeNeeded = (DAILY_BATCH_SIZE * maxDelay) / 60; // Convert to minutes
+
+        let batchSize;
+        if (maxTimeNeeded <= MAX_CRON_TIME_MINUTES) {
+          // We can process full batch within time limit
+          batchSize = DAILY_BATCH_SIZE;
+        } else {
+          // Reduce batch size to fit in time limit
+          batchSize = Math.floor((MAX_CRON_TIME_MINUTES * 60) / maxDelay);
+          batchSize = Math.max(10, Math.min(batchSize, 100)); // Between 10-100 emails
+        }
 
         console.log(
-          `📊 Batch size for campaign ${campaign.id}: ${batchSize} emails (avg delay: ${avgDelay}s)`
+          `📊 Daily batch size for campaign ${campaign.id}: ${batchSize} emails (user delay: ${userSettings.send_delay_min}-${userSettings.send_delay_max}s)`
         );
 
         // Get pending recipients for this campaign
@@ -224,13 +234,13 @@ export async function GET(request) {
               );
             }
 
-            // Add delay between emails (respecting user settings)
+            //Use user's actual delay settings for daily processing
             if (
               pendingRecipients.indexOf(recipient) <
               pendingRecipients.length - 1
             ) {
-              const minDelay = userSettings.send_delay_min * 1000;
-              const maxDelay = userSettings.send_delay_max * 1000;
+              const minDelay = (userSettings.send_delay_min || 8) * 1000;
+              const maxDelay = (userSettings.send_delay_max || 20) * 1000;
               const randomDelay =
                 Math.floor(Math.random() * (maxDelay - minDelay + 1)) +
                 minDelay;
