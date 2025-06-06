@@ -462,8 +462,8 @@ const BulkUpload = ({
             • <span className="font-medium">Position</span> column (optional)
           </div>
           <div className="text-gray-500 mt-2">
-            💡 Column names are flexible: "Email", "email", "EMAIL", "Email
-            Address" all work
+            💡 Column names are flexible: &quot;Email&quot;, &quot;email&quot;,
+            &quot;EMAIL&quot;, &quot;Email Address&quot; all work
           </div>
         </div>
       </div>

@@ -2,9 +2,16 @@
   "functions": {
     "src/app/api/**/*.js": {
       "maxDuration": 30
+    },
+    "src/app/api/cron/process-emails/route.js": {
+      "maxDuration": 60
     }
   },
   "crons": [
+    {
+      "path": "/api/cron/process-emails",
+      "schedule": "* * * * *"
+    },
     {
       "path": "/api/cleanup",
       "schedule": "0 2 * * 0"

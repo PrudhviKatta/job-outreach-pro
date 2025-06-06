@@ -1,4 +1,4 @@
-// src/app/email/page.js
+// src/app/email/page.js - PHASE 3 UPDATES
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
@@ -45,15 +45,17 @@ export default function EmailPage() {
   const [statusPolling, setStatusPolling] = useState(null);
   const [draftLoaded, setDraftLoaded] = useState(false);
 
+  // NEW: Background sending state
+  const [backgroundCampaignId, setBackgroundCampaignId] = useState(null);
+  const [showBackgroundStatus, setShowBackgroundStatus] = useState(false);
+
   // Load existing draft on page load - FIXED VERSION
   const loadDraft = useCallback(async () => {
-    // ✅ PREVENT MULTIPLE CALLS
     if (draftLoaded) {
       console.log("Draft already loaded, skipping");
       return;
     }
 
-    // ✅ SET FLAG IMMEDIATELY to prevent race conditions
     setDraftLoaded(true);
 
     try {
@@ -79,11 +81,8 @@ export default function EmailPage() {
         console.log("📥 Loading draft from database:", {
           campaignName: campaignName || "Unnamed campaign",
           recipientCount: recipients?.length || 0,
-          recipients:
-            recipients?.map((r) => ({ id: r.id, email: r.email })) || [],
         });
 
-        // Restore the draft state
         setCampaignId(campaignId);
         setSelectedTemplate(templateId || "");
         setSelectedResume(resumeId || "");
@@ -92,7 +91,6 @@ export default function EmailPage() {
         console.log("Draft loaded:", campaignName || "Unnamed campaign");
         toast.success("Previous draft restored!");
 
-        // Check if there's an active campaign after loading draft
         if (campaignId) {
           checkCampaignStatus(campaignId, session);
         }
@@ -101,10 +99,9 @@ export default function EmailPage() {
       }
     } catch (error) {
       console.error("Error loading draft:", error);
-      // ✅ RESET FLAG ON ERROR so it can be retried
       setDraftLoaded(false);
     }
-  }, [draftLoaded]); // ✅ Include draftLoaded in dependencies
+  }, [draftLoaded]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -156,7 +153,6 @@ export default function EmailPage() {
       if (resumesError) throw resumesError;
       setResumes(resumesData || []);
 
-      // ✅ ONLY LOAD DRAFT ONCE, AFTER OTHER DATA IS LOADED
       await loadDraft();
     } catch (error) {
       toast.error("Error loading data");
@@ -170,9 +166,8 @@ export default function EmailPage() {
     fetchData();
   }, [fetchData]);
 
-  // ✅ IMPROVED Auto-save draft when recipients change
+  // Auto-save draft when recipients change
   const saveDraft = useCallback(async () => {
-    // DON'T auto-save during active campaigns
     if (
       sending ||
       campaignStatus === "sending" ||
@@ -201,7 +196,7 @@ export default function EmailPage() {
           templateId: selectedTemplate,
           resumeId: selectedResume,
           recipients: recipients,
-          campaignName: null, // Auto-generate name
+          campaignName: null,
         }),
       });
 
@@ -216,10 +211,8 @@ export default function EmailPage() {
     }
   }, [selectedTemplate, selectedResume, recipients, sending, campaignStatus]);
 
-  // ✅ IMPROVED Helper function to save draft with specific recipients
   const saveDraftWithRecipients = useCallback(
     async (recipientsList) => {
-      // DON'T save during active campaigns
       if (
         sending ||
         campaignStatus === "sending" ||
@@ -267,7 +260,7 @@ export default function EmailPage() {
     [selectedTemplate, selectedResume, sending, campaignStatus]
   );
 
-  // NEW: Function to check campaign status and resume polling if needed
+  // Function to check campaign status and resume polling if needed
   const checkCampaignStatus = async (campaignId, session) => {
     try {
       const response = await fetch(
@@ -284,7 +277,6 @@ export default function EmailPage() {
       if (data.success) {
         const { campaign } = data;
 
-        // Update all states based on current campaign status
         setCampaignStatus(campaign.status);
         setCampaignProgress(campaign.progress);
         setCurrentlySending(campaign.currentlySending);
@@ -292,7 +284,6 @@ export default function EmailPage() {
         setFailedRecipients(campaign.recipients.failed || []);
         setRecipients(campaign.recipients.pending || []);
 
-        // If campaign is actively running, start polling and email loop
         if (campaign.status === "sending" || campaign.status === "paused") {
           setSending(true);
           setIsPaused(campaign.status === "paused");
@@ -316,15 +307,12 @@ export default function EmailPage() {
     }
   };
 
-  // Add this new function alongside handleAddRecipient
   const handleBulkAdd = async (newRecipients) => {
     console.log(`🏠 Page: Bulk adding ${newRecipients.length} recipients`);
 
-    // Add all recipients to state at once
     const updatedRecipients = [...recipients, ...newRecipients];
     setRecipients(updatedRecipients);
 
-    // Save to database ONCE with all recipients
     await saveDraftWithRecipients(updatedRecipients);
 
     console.log(
@@ -336,22 +324,32 @@ export default function EmailPage() {
     const newRecipient = { ...recipient, id: Date.now() };
     const updatedRecipients = [...recipients, newRecipient];
 
-    // Update UI immediately
     setRecipients(updatedRecipients);
-
-    // Save to database immediately
     await saveDraftWithRecipients(updatedRecipients);
   };
 
-  const handleSendEmails = async () => {
+  // NEW: Handle method selection (immediate vs background)
+  const handleSendMethodSelect = async (method) => {
+    if (method === "realtime") {
+      // Existing immediate sending logic
+      handleSendEmails();
+    } else if (method === "background") {
+      // NEW: Background sending logic
+      handleSendInBackground();
+    }
+  };
+
+  // NEW: Background sending handler
+  const handleSendInBackground = async () => {
     if (!selectedTemplate || recipients.length === 0) {
       toast.error("Please fill all required fields");
       return;
     }
 
-    setSending(true);
-    setShouldStop(false);
-    setIsPaused(false);
+    if (recipients.length > 500) {
+      toast.error("Maximum 500 recipients allowed for background sending");
+      return;
+    }
 
     try {
       const {
@@ -373,7 +371,7 @@ export default function EmailPage() {
         return;
       }
 
-      // Start the campaign
+      // Start the background campaign
       const response = await fetch("/api/campaigns/start", {
         method: "POST",
         headers: {
@@ -382,6 +380,86 @@ export default function EmailPage() {
         },
         body: JSON.stringify({
           campaignId: campaignId,
+          sendMethod: "background", // NEW: Specify background method
+        }),
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        toast.success("Campaign queued for background processing!");
+
+        // Set background campaign state
+        setBackgroundCampaignId(campaignId);
+        setShowBackgroundStatus(true);
+        setCampaignStatus("sending");
+
+        // Clear recipients since they're now being processed
+        setRecipients([]);
+
+        // Start light polling for background status
+        startBackgroundStatusPolling();
+
+        // Show informational message
+        toast.info(
+          "Campaign is running in background. You can close this page safely.",
+          {
+            duration: 5000,
+          }
+        );
+      } else {
+        toast.error(data.error || "Failed to start background campaign");
+      }
+    } catch (error) {
+      console.error("Background campaign error:", error);
+      toast.error("Error starting background campaign");
+    }
+  };
+
+  // Existing immediate sending handler
+  const handleSendEmails = async () => {
+    if (!selectedTemplate || recipients.length === 0) {
+      toast.error("Please fill all required fields");
+      return;
+    }
+
+    if (recipients.length > 20) {
+      toast.error("Use background sending for campaigns over 20 recipients");
+      return;
+    }
+
+    setSending(true);
+    setShouldStop(false);
+    setIsPaused(false);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) {
+        toast.error("Please login again");
+        return;
+      }
+
+      if (!campaignId) {
+        await saveDraft();
+      }
+
+      if (!campaignId) {
+        toast.error("Failed to create campaign");
+        return;
+      }
+
+      const response = await fetch("/api/campaigns/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          campaignId: campaignId,
+          sendMethod: "immediate", // NEW: Specify immediate method
         }),
       });
 
@@ -390,8 +468,6 @@ export default function EmailPage() {
       if (data.success) {
         toast.success("Campaign started successfully!");
         setCampaignStatus("sending");
-
-        // Start the campaign loop and status polling
         startStatusPolling();
       } else {
         toast.error(data.error || "Failed to start campaign");
@@ -403,6 +479,65 @@ export default function EmailPage() {
       setSending(false);
     }
   };
+
+  // NEW: Background status polling (lighter than real-time)
+  const startBackgroundStatusPolling = useCallback(() => {
+    if (statusPolling) {
+      clearInterval(statusPolling);
+    }
+
+    const pollInterval = setInterval(async () => {
+      if (!backgroundCampaignId) return;
+
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!session) return;
+
+        const response = await fetch(
+          `/api/campaigns/status?campaignId=${backgroundCampaignId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+            },
+          }
+        );
+
+        const data = await response.json();
+
+        if (data.success) {
+          const { campaign } = data;
+
+          setCampaignProgress(campaign.progress);
+          setSentRecipients(campaign.recipients.sent || []);
+          setFailedRecipients(campaign.recipients.failed || []);
+
+          // Check if completed
+          if (
+            campaign.status === "completed" ||
+            campaign.status === "cancelled"
+          ) {
+            setShowBackgroundStatus(false);
+            setBackgroundCampaignId(null);
+            clearInterval(pollInterval);
+            setStatusPolling(null);
+
+            if (campaign.status === "completed") {
+              toast.success(
+                `✅ Background campaign completed: ${campaign.progress.sent} sent, ${campaign.progress.failed} failed`
+              );
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Background status polling error:", error);
+      }
+    }, 10000); // Poll every 10 seconds for background campaigns
+
+    setStatusPolling(pollInterval);
+  }, [backgroundCampaignId]);
 
   const refreshCampaignStatus = useCallback(async () => {
     if (!campaignId) return;
@@ -427,31 +562,27 @@ export default function EmailPage() {
       if (data.success) {
         const { campaign } = data;
 
-        // ✅ CLEAN SLATE: When campaign is completed
         if (
           campaign.status === "completed" ||
           campaign.status === "cancelled"
         ) {
           console.log("🧹 Campaign completed - cleaning slate");
 
-          // Stop polling by clearing the interval directly
           if (statusPolling) {
             clearInterval(statusPolling);
             setStatusPolling(null);
           }
 
-          // Reset all campaign states
           setSending(false);
           setCurrentlySending(null);
           setCurrentDelayInfo(null);
           setSentRecipients([]);
           setFailedRecipients([]);
-          setRecipients([]); // This allows fresh start
+          setRecipients([]);
           setCampaignId(null);
           setCampaignStatus(null);
           setCampaignProgress({ sent: 0, failed: 0, total: 0 });
 
-          // Show completion message
           if (campaign.status === "completed") {
             toast.success(
               `✅ Campaign completed: ${campaign.progress.sent} sent, ${campaign.progress.failed} failed`
@@ -460,10 +591,9 @@ export default function EmailPage() {
             toast.info("Campaign was cancelled");
           }
 
-          return; // Don't update with old data
+          return;
         }
 
-        // Normal status updates for active campaigns
         setCampaignStatus(campaign.status);
         setCampaignProgress(campaign.progress);
         setSentRecipients(campaign.recipients.sent || []);
@@ -477,122 +607,19 @@ export default function EmailPage() {
     }
   }, [campaignId, statusPolling]);
 
-  // Start the campaign loop - sends emails with delays
-  const startCampaignLoop = useCallback(async () => {
-    if (!campaignId) return;
-
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (!session) {
-      toast.error("Session expired, please login again");
-      return;
-    }
-
-    const continueLoop = async () => {
-      // Check if campaign should continue
-      if (
-        shouldStop ||
-        campaignStatus === "paused" ||
-        campaignStatus === "cancelled"
-      ) {
-        console.log("Campaign loop stopped:", { shouldStop, campaignStatus });
-        return;
-      }
-
-      try {
-        // Send next email
-        const response = await fetch("/api/campaigns/continue", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({ campaignId }),
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-          if (data.sentTo) {
-            console.log(`Email sent to: ${data.sentTo.email}`);
-            setCurrentlySending(data.sentTo);
-
-            // Brief moment to show "currently sending"
-            setTimeout(() => {
-              setCurrentlySending(null);
-            }, 1000);
-          }
-
-          // Refresh status to get updated recipient lists
-          await refreshCampaignStatus();
-
-          if (
-            data.shouldContinue &&
-            campaignStatus === "sending" &&
-            !shouldStop
-          ) {
-            // Calculate delay
-            const minDelay = 8000; // 8 seconds default
-            const maxDelay = 20000; // 20 seconds default
-            const randomDelay =
-              Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
-
-            setCurrentDelayInfo(
-              `Waiting ${Math.round(
-                randomDelay / 1000
-              )} seconds before next email...`
-            );
-
-            // Wait before sending next email
-            setTimeout(() => {
-              setCurrentDelayInfo(null);
-              continueLoop(); // Recursive call for next email
-            }, randomDelay);
-          } else {
-            // Campaign finished or should stop
-            setSending(false);
-            setCurrentlySending(null);
-            setCurrentDelayInfo(null);
-
-            if (!data.shouldContinue) {
-              toast.success("Campaign completed successfully!");
-            }
-          }
-        } else {
-          console.error("Continue campaign error:", data.error);
-          setSending(false);
-          setCurrentlySending(null);
-          toast.error(data.error || "Error continuing campaign");
-        }
-      } catch (error) {
-        console.error("Campaign loop error:", error);
-        setSending(false);
-        setCurrentlySending(null);
-        toast.error("Error in campaign loop");
-      }
-    };
-
-    // Start the loop
-    continueLoop();
-  }, [campaignId, shouldStop, campaignStatus, refreshCampaignStatus]);
-
-  // Start polling for campaign status updates (lighter polling for UI updates)
+  // Start polling for campaign status updates (for immediate sending)
   const startStatusPolling = useCallback(() => {
-    // Clear any existing polling first
     if (statusPolling) {
       clearInterval(statusPolling);
     }
 
     const pollInterval = setInterval(async () => {
       await refreshCampaignStatus();
-    }, 3000); // Poll every 3 seconds for status updates
+    }, 3000); // Poll every 3 seconds for immediate campaigns
 
     setStatusPolling(pollInterval);
-  }, [campaignId]);
+  }, [refreshCampaignStatus]);
 
-  // Stop status polling
   const stopStatusPolling = useCallback(() => {
     if (statusPolling) {
       clearInterval(statusPolling);
@@ -600,18 +627,16 @@ export default function EmailPage() {
     }
   }, [statusPolling]);
 
-  // NEW: Handle page visibility changes (tab switching)
+  // Handle page visibility changes
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        // Tab became visible again
         if (
           campaignId &&
           (campaignStatus === "sending" || campaignStatus === "paused")
         ) {
           console.log("Tab visible again, checking campaign status...");
 
-          // Re-check campaign status when tab becomes visible
           const recheckStatus = async () => {
             const {
               data: { session },
@@ -623,9 +648,6 @@ export default function EmailPage() {
 
           recheckStatus();
         }
-      } else {
-        // Tab became hidden - we can keep polling in background
-        console.log("Tab hidden, polling continues in background");
       }
     };
 
@@ -636,7 +658,6 @@ export default function EmailPage() {
     };
   }, [campaignId, campaignStatus]);
 
-  // Cleanup polling on unmount
   useEffect(() => {
     return () => stopStatusPolling();
   }, [stopStatusPolling]);
@@ -751,47 +772,24 @@ export default function EmailPage() {
   const handleRetryFailed = async (failedList) => {
     if (!failedList || failedList.length === 0) return;
 
-    // Move failed recipients back to main recipients list
     setRecipients((prev) => [...prev, ...failedList]);
 
-    // Remove from failed list
     setFailedRecipients((prev) =>
       prev.filter(
         (failed) => !failedList.find((retry) => retry.id === failed.id)
       )
     );
 
-    // Update progress total
     setCampaignProgress((prev) => ({
       ...prev,
-      total: prev.total, // Keep the same total, just redistributing
+      total: prev.total,
     }));
 
     toast.info(`${failedList.length} recipients moved back to queue`);
   };
 
-  const handleSendMethodSelect = (method) => {
-    if (method === "realtime") {
-      handleSendEmails();
-    } else if (method === "background") {
-      handleSendInBackground();
-    }
-  };
-
-  const handleSendInBackground = async () => {
-    // TODO: Implement background sending
-    toast.info("Background sending will be implemented in the next step!");
-    console.log(
-      "Background sending selected with",
-      recipients.length,
-      "recipients"
-    );
-  };
-
-  // ✅ FIXED Remove recipient function
   const handleRemoveRecipient = useCallback(
     async (id) => {
-      // DON'T allow removal during active campaigns
       if (
         sending ||
         campaignStatus === "sending" ||
@@ -802,17 +800,14 @@ export default function EmailPage() {
       }
 
       if (id.toString().startsWith("failed-")) {
-        // Remove from failed list
         const actualId = id.replace("failed-", "");
         setFailedRecipients((prev) =>
           prev.filter((r) => r.id.toString() !== actualId)
         );
       } else {
-        // Remove from main recipients list
         const updatedRecipients = recipients.filter((r) => r.id !== id);
         setRecipients(updatedRecipients);
 
-        // 🔥 FORCE SAVE TO DATABASE IMMEDIATELY
         console.log(
           `🗑️ Removing recipient ${id}, saving ${updatedRecipients.length} recipients to database`
         );
@@ -887,6 +882,55 @@ export default function EmailPage() {
       <h1 className="text-3xl font-bold text-gray-900 mb-8">
         Send Email Campaign
       </h1>
+
+      {/* NEW: Background Campaign Status Bar */}
+      {showBackgroundStatus && (
+        <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center">
+              <div className="animate-spin mr-3">
+                <svg
+                  className="w-5 h-5 text-blue-600"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  ></circle>
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  ></path>
+                </svg>
+              </div>
+              <div>
+                <h3 className="font-medium text-blue-900">
+                  Background Campaign Running
+                </h3>
+                <p className="text-sm text-blue-700">
+                  {campaignProgress.sent} sent, {campaignProgress.failed} failed
+                  {campaignProgress.total > 0 && (
+                    <span> of {campaignProgress.total} total</span>
+                  )}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowBackgroundStatus(false)}
+              className="text-blue-600 hover:text-blue-800 text-sm"
+            >
+              Hide
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div>
           <EmailForm
@@ -923,9 +967,11 @@ export default function EmailPage() {
             onStopSending={handleStopSending}
             shouldStop={shouldStop}
             forceStop={forceStop}
-            // New props for sending method selection
+            // NEW: Updated props for method selection
             onSendMethodSelect={handleSendMethodSelect}
-            showMethodSelection={recipients.length > 0 && !sending}
+            showMethodSelection={
+              recipients.length > 0 && !sending && !showBackgroundStatus
+            }
           />
         </div>
       </div>
