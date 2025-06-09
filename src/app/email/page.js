@@ -166,7 +166,7 @@ export default function EmailPage() {
       console.log(`🚀 Starting campaign with ${recipients.length} recipients`);
 
       // Use the existing /api/campaigns/start endpoint (not start-clean)
-      const response = await fetch("/api/campaigns/start", {
+      const response = await fetch("/api/campaigns/start-clean", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
