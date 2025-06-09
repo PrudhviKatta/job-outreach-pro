@@ -1,15 +1,16 @@
-// src/app/email/page.js - PHASE 3 UPDATES
+// Clean EmailPage.js - Phase 2: Simple campaign management
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
-import EmailForm from "@/components/Email/EmailForm";
-import RecipientList from "@/components/Email/RecipientList";
+import CleanEmailForm from "@/components/Email/EmailForm";
+import CampaignProgress from "@/components/Email/CampaignProgress";
 import { supabase } from "@/lib/supabase";
-import { AlertCircle, Settings } from "lucide-react";
+import { AlertCircle, Settings, CheckCircle } from "lucide-react";
 import Button from "@/components/UI/Button";
 import toast from "react-hot-toast";
 
 export default function EmailPage() {
+  // Core state
   const [templates, setTemplates] = useState([]);
   const [resumes, setResumes] = useState([]);
   const [recipients, setRecipients] = useState([]);
@@ -19,9 +20,9 @@ export default function EmailPage() {
   const [emailConfigured, setEmailConfigured] = useState(false);
   const [dailyEmailCount, setDailyEmailCount] = useState(0);
 
-  // Campaign management
+  // Campaign state (simplified)
   const [campaignId, setCampaignId] = useState(null);
-  const [campaignStatus, setCampaignStatus] = useState(null);
+  const [campaignStatus, setCampaignStatus] = useState(null); // null, 'sending', 'completed', 'failed'
   const [campaignProgress, setCampaignProgress] = useState({
     total: 0,
     sent: 0,
@@ -29,81 +30,22 @@ export default function EmailPage() {
     pending: 0,
   });
 
-  // Recipients by status
-  const [currentlySending, setCurrentlySending] = useState(null);
-  const [sentRecipients, setSentRecipients] = useState([]);
-  const [failedRecipients, setFailedRecipients] = useState([]);
-
-  // User control states
-  const [sending, setSending] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
+  // Single status polling
+  const [statusInterval, setStatusInterval] = useState(null);
+  // Add missing shouldStop state
   const [shouldStop, setShouldStop] = useState(false);
-  const [currentDelayInfo, setCurrentDelayInfo] = useState(null);
-  const [forceStop, setForceStop] = useState(false);
 
-  // Real-time updates
-  const [statusPolling, setStatusPolling] = useState(null);
-  const [draftLoaded, setDraftLoaded] = useState(false);
-
-  // NEW: Background sending state
-  const [backgroundCampaignId, setBackgroundCampaignId] = useState(null);
-  const [showBackgroundStatus, setShowBackgroundStatus] = useState(false);
-
-  // Load existing draft on page load - FIXED VERSION
-  const loadDraft = useCallback(async () => {
-    if (draftLoaded) {
-      console.log("Draft already loaded, skipping");
-      return;
-    }
-
-    setDraftLoaded(true);
-
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) return;
-
-      const response = await fetch("/api/campaigns/draft", {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      });
-
-      const data = await response.json();
-
-      if (data.success && data.draft) {
-        const { campaignId, campaignName, templateId, resumeId, recipients } =
-          data.draft;
-
-        console.log("📥 Loading draft from database:", {
-          campaignName: campaignName || "Unnamed campaign",
-          recipientCount: recipients?.length || 0,
-        });
-
-        setCampaignId(campaignId);
-        setSelectedTemplate(templateId || "");
-        setSelectedResume(resumeId || "");
-        setRecipients(recipients || []);
-
-        console.log("Draft loaded:", campaignName || "Unnamed campaign");
-        toast.success("Previous draft restored!");
-
-        if (campaignId) {
-          checkCampaignStatus(campaignId, session);
-        }
-      } else {
-        console.log("📭 No draft found in database");
+  useEffect(() => {
+    fetchInitialData();
+    return () => {
+      if (statusInterval) {
+        console.log("🧹 Clearing interval on component unmount");
+        clearInterval(statusInterval);
       }
-    } catch (error) {
-      console.error("Error loading draft:", error);
-      setDraftLoaded(false);
-    }
-  }, [draftLoaded]);
+    };
+  }, []);
 
-  const fetchData = useCallback(async () => {
+  const fetchInitialData = async () => {
     try {
       const {
         data: { session },
@@ -111,11 +53,8 @@ export default function EmailPage() {
 
       // Check email configuration
       const emailResponse = await fetch("/api/email/settings", {
-        headers: {
-          Authorization: `Bearer ${session?.access_token}`,
-        },
+        headers: { Authorization: `Bearer ${session?.access_token}` },
       });
-
       if (emailResponse.ok) {
         const emailData = await emailResponse.json();
         setEmailConfigured(emailData.data?.email_configured || false);
@@ -123,11 +62,8 @@ export default function EmailPage() {
 
       // Fetch daily email count
       const dailyCountResponse = await fetch("/api/campaigns/daily-count", {
-        headers: {
-          Authorization: `Bearer ${session?.access_token}`,
-        },
+        headers: { Authorization: `Bearer ${session?.access_token}` },
       });
-
       if (dailyCountResponse.ok) {
         const dailyData = await dailyCountResponse.json();
         setDailyEmailCount(dailyData.count || 0);
@@ -153,40 +89,84 @@ export default function EmailPage() {
       if (resumesError) throw resumesError;
       setResumes(resumesData || []);
 
-      await loadDraft();
+      // Check for active campaigns
+      await checkActiveCampaign(session);
     } catch (error) {
       toast.error("Error loading data");
       console.error(error);
     } finally {
       setLoading(false);
     }
-  }, [loadDraft]);
+  };
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  const checkActiveCampaign = async (session) => {
+    try {
+      console.log("🔍 Checking for active campaigns...");
 
-  // Auto-save draft when recipients change
-  const saveDraft = useCallback(async () => {
-    if (
-      sending ||
-      campaignStatus === "sending" ||
-      campaignStatus === "paused"
-    ) {
-      console.log("Skipping auto-save: campaign is active");
+      const { data: activeCampaigns } = await supabase
+        .from("email_campaigns")
+        .select("id, status, total_recipients, sent_count, failed_count")
+        .eq("status", "sending")
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      console.log("📋 Found active campaigns:", activeCampaigns);
+
+      if (activeCampaigns && activeCampaigns.length > 0) {
+        const campaign = activeCampaigns[0];
+        console.log("✅ Resuming monitoring for campaign:", campaign.id);
+
+        setCampaignId(campaign.id);
+        setCampaignStatus("sending");
+        setCampaignProgress({
+          total: campaign.total_recipients,
+          sent: campaign.sent_count,
+          failed: campaign.failed_count,
+          pending:
+            campaign.total_recipients -
+            campaign.sent_count -
+            campaign.failed_count,
+        });
+        startStatusPolling(campaign.id, session);
+        toast.success("Found active campaign - monitoring progress");
+      } else {
+        console.log("ℹ️ No active campaigns found");
+      }
+    } catch (error) {
+      console.error("Error checking active campaigns:", error);
+    }
+  };
+
+  const handleRecipientsReady = (newRecipients) => {
+    console.log(`📥 Received ${newRecipients.length} recipients`);
+    setRecipients(newRecipients);
+  };
+
+  const handleStartCampaign = async () => {
+    if (!selectedTemplate || recipients.length === 0) {
+      toast.error("Please select a template and add recipients");
       return;
     }
 
-    if (!selectedTemplate || recipients.length === 0) return;
+    if (recipients.length > 500) {
+      toast.error("Maximum 500 recipients allowed");
+      return;
+    }
 
     try {
       const {
         data: { session },
       } = await supabase.auth.getSession();
 
-      if (!session) return;
+      if (!session) {
+        toast.error("Please login again");
+        return;
+      }
 
-      const response = await fetch("/api/campaigns/draft", {
+      console.log(`🚀 Starting campaign with ${recipients.length} recipients`);
+
+      // Use the existing /api/campaigns/start endpoint (not start-clean)
+      const response = await fetch("/api/campaigns/start", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -194,272 +174,8 @@ export default function EmailPage() {
         },
         body: JSON.stringify({
           templateId: selectedTemplate,
-          resumeId: selectedResume,
+          resumeId: selectedResume || null,
           recipients: recipients,
-          campaignName: null,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        setCampaignId(data.campaignId);
-        console.log("Draft saved automatically");
-      }
-    } catch (error) {
-      console.error("Error saving draft:", error);
-    }
-  }, [selectedTemplate, selectedResume, recipients, sending, campaignStatus]);
-
-  const saveDraftWithRecipients = useCallback(
-    async (recipientsList) => {
-      if (
-        sending ||
-        campaignStatus === "sending" ||
-        campaignStatus === "paused"
-      ) {
-        console.log("Skipping save: campaign is active");
-        return;
-      }
-
-      if (!selectedTemplate || recipientsList.length === 0) {
-        return;
-      }
-
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
-        if (!session) return;
-
-        const response = await fetch("/api/campaigns/draft", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({
-            templateId: selectedTemplate,
-            resumeId: selectedResume,
-            recipients: recipientsList,
-            campaignName: null,
-          }),
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-          setCampaignId(data.campaignId);
-          console.log("Draft saved immediately");
-        }
-      } catch (error) {
-        console.error("Error saving draft immediately:", error);
-      }
-    },
-    [selectedTemplate, selectedResume, sending, campaignStatus]
-  );
-
-  // Function to check campaign status and resume polling if needed
-  const checkCampaignStatus = async (campaignId, session) => {
-    try {
-      const response = await fetch(
-        `/api/campaigns/status?campaignId=${campaignId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-          },
-        }
-      );
-
-      const data = await response.json();
-
-      if (data.success) {
-        const { campaign } = data;
-
-        setCampaignStatus(campaign.status);
-        setCampaignProgress(campaign.progress);
-        setCurrentlySending(campaign.currentlySending);
-        setSentRecipients(campaign.recipients.sent || []);
-        setFailedRecipients(campaign.recipients.failed || []);
-        setRecipients(campaign.recipients.pending || []);
-
-        if (campaign.status === "sending" || campaign.status === "paused") {
-          setSending(true);
-          setIsPaused(campaign.status === "paused");
-          startStatusPolling();
-
-          if (campaign.status === "sending") {
-            toast.info("Resuming campaign monitoring...");
-          } else {
-            toast.info("Campaign is paused - you can resume it");
-          }
-        } else if (campaign.status === "completed") {
-          toast.success(
-            `Campaign completed: ${campaign.progress.sent} sent, ${campaign.progress.failed} failed`
-          );
-        } else if (campaign.status === "cancelled") {
-          toast.info("Campaign was previously cancelled");
-        }
-      }
-    } catch (error) {
-      console.error("Error checking campaign status:", error);
-    }
-  };
-
-  const handleBulkAdd = async (newRecipients) => {
-    console.log(`🏠 Page: Bulk adding ${newRecipients.length} recipients`);
-
-    const updatedRecipients = [...recipients, ...newRecipients];
-    setRecipients(updatedRecipients);
-
-    await saveDraftWithRecipients(updatedRecipients);
-
-    console.log(
-      `✅ Bulk add complete: ${updatedRecipients.length} total recipients`
-    );
-  };
-
-  const handleAddRecipient = async (recipient) => {
-    const newRecipient = { ...recipient, id: Date.now() };
-    const updatedRecipients = [...recipients, newRecipient];
-
-    setRecipients(updatedRecipients);
-    await saveDraftWithRecipients(updatedRecipients);
-  };
-
-  // NEW: Handle method selection (immediate vs background)
-  const handleSendMethodSelect = async (method) => {
-    if (method === "realtime") {
-      // Existing immediate sending logic
-      handleSendEmails();
-    } else if (method === "background") {
-      // NEW: Background sending logic
-      handleSendInBackground();
-    }
-  };
-
-  // NEW: Background sending handler
-  const handleSendInBackground = async () => {
-    if (!selectedTemplate || recipients.length === 0) {
-      toast.error("Please fill all required fields");
-      return;
-    }
-
-    if (recipients.length > 500) {
-      toast.error("Maximum 500 recipients allowed for background sending");
-      return;
-    }
-
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        toast.error("Please login again");
-        return;
-      }
-
-      // Save draft first (if not already saved)
-      if (!campaignId) {
-        await saveDraft();
-      }
-
-      if (!campaignId) {
-        toast.error("Failed to create campaign");
-        return;
-      }
-
-      // Start the background campaign
-      const response = await fetch("/api/campaigns/start", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          campaignId: campaignId,
-          sendMethod: "background", // NEW: Specify background method
-        }),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        toast.success("Campaign queued for background processing!");
-
-        // Set background campaign state
-        setBackgroundCampaignId(campaignId);
-        setShowBackgroundStatus(true);
-        setCampaignStatus("sending");
-
-        // Clear recipients since they're now being processed
-        setRecipients([]);
-
-        // Start light polling for background status
-        startBackgroundStatusPolling();
-
-        // Show informational message
-        toast.info(
-          "Campaign is running in background. You can close this page safely.",
-          {
-            duration: 5000,
-          }
-        );
-      } else {
-        toast.error(data.error || "Failed to start background campaign");
-      }
-    } catch (error) {
-      console.error("Background campaign error:", error);
-      toast.error("Error starting background campaign");
-    }
-  };
-
-  // Existing immediate sending handler
-  const handleSendEmails = async () => {
-    if (!selectedTemplate || recipients.length === 0) {
-      toast.error("Please fill all required fields");
-      return;
-    }
-
-    if (recipients.length > 20) {
-      toast.error("Use background sending for campaigns over 20 recipients");
-      return;
-    }
-
-    setSending(true);
-    setShouldStop(false);
-    setIsPaused(false);
-
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session) {
-        toast.error("Please login again");
-        return;
-      }
-
-      if (!campaignId) {
-        await saveDraft();
-      }
-
-      if (!campaignId) {
-        toast.error("Failed to create campaign");
-        return;
-      }
-
-      const response = await fetch("/api/campaigns/start", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          campaignId: campaignId,
-          sendMethod: "immediate", // NEW: Specify immediate method
         }),
       });
 
@@ -467,272 +183,112 @@ export default function EmailPage() {
 
       if (data.success) {
         toast.success("Campaign started successfully!");
+
+        setCampaignId(data.campaignId);
         setCampaignStatus("sending");
-        startStatusPolling();
+        setCampaignProgress({
+          total: recipients.length,
+          sent: 0,
+          failed: 0,
+          pending: recipients.length,
+        });
+
+        // Clear recipients from UI (they're now being processed)
+        setRecipients([]);
+
+        // Start monitoring progress
+        startStatusPolling(data.campaignId, session);
       } else {
         toast.error(data.error || "Failed to start campaign");
-        setSending(false);
       }
     } catch (error) {
       console.error("Start campaign error:", error);
       toast.error("Error starting campaign");
-      setSending(false);
     }
   };
 
-  // NEW: Background status polling (lighter than real-time)
-  const startBackgroundStatusPolling = useCallback(() => {
-    if (statusPolling) {
-      clearInterval(statusPolling);
+  const startStatusPolling = (campaignId, session) => {
+    console.log("🔄 Starting status polling for campaign:", campaignId);
+
+    // Clear any existing interval first
+    if (statusInterval) {
+      console.log("🧹 Clearing existing polling interval");
+      clearInterval(statusInterval);
     }
 
-    const pollInterval = setInterval(async () => {
-      if (!backgroundCampaignId) return;
-
+    const interval = setInterval(async () => {
+      console.log("📊 Status polling tick for campaign:", campaignId);
       try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
-        if (!session) return;
-
         const response = await fetch(
-          `/api/campaigns/status?campaignId=${backgroundCampaignId}`,
+          `/api/campaigns/status?campaignId=${campaignId}`,
           {
-            headers: {
-              Authorization: `Bearer ${session.access_token}`,
-            },
+            headers: { Authorization: `Bearer ${session.access_token}` },
           }
         );
+
+        if (!response.ok) {
+          console.error("❌ Status polling response not ok:", response.status);
+          return;
+        }
 
         const data = await response.json();
 
         if (data.success) {
           const { campaign } = data;
 
+          console.log("📋 Campaign status from API:", campaign.status);
+
           setCampaignProgress(campaign.progress);
-          setSentRecipients(campaign.recipients.sent || []);
-          setFailedRecipients(campaign.recipients.failed || []);
 
-          // Check if completed
+          // Handle all terminal states and STOP POLLING
           if (
-            campaign.status === "completed" ||
-            campaign.status === "cancelled"
+            ["completed", "failed", "stopped", "cancelled"].includes(
+              campaign.status
+            )
           ) {
-            setShowBackgroundStatus(false);
-            setBackgroundCampaignId(null);
-            clearInterval(pollInterval);
-            setStatusPolling(null);
+            console.log(`🛑 Campaign ${campaign.status} - stopping polling`);
+            setCampaignStatus(campaign.status);
+            clearInterval(interval);
+            setStatusInterval(null);
 
+            // Show appropriate message
             if (campaign.status === "completed") {
               toast.success(
-                `✅ Background campaign completed: ${campaign.progress.sent} sent, ${campaign.progress.failed} failed`
+                `✅ Campaign completed! ${campaign.progress.sent} sent, ${campaign.progress.failed} failed`
               );
+            } else if (campaign.status === "failed") {
+              toast.error("❌ Campaign failed");
+            } else if (campaign.status === "stopped") {
+              toast.success("Campaign stopped");
+            } else if (campaign.status === "cancelled") {
+              toast.info("Campaign cancelled");
             }
           }
+        } else {
+          console.error("❌ Status polling API error:", data.error);
         }
       } catch (error) {
-        console.error("Background status polling error:", error);
+        console.error("❌ Status polling network error:", error);
       }
-    }, 10000); // Poll every 10 seconds for background campaigns
+    }, 5000); // Poll every 5 seconds
 
-    setStatusPolling(pollInterval);
-  }, [backgroundCampaignId]);
-
-  const refreshCampaignStatus = useCallback(async () => {
-    if (!campaignId) return;
-
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session) return;
-
-      const response = await fetch(
-        `/api/campaigns/status?campaignId=${campaignId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-          },
-        }
-      );
-
-      const data = await response.json();
-
-      if (data.success) {
-        const { campaign } = data;
-
-        if (
-          campaign.status === "completed" ||
-          campaign.status === "cancelled"
-        ) {
-          console.log("🧹 Campaign completed - cleaning slate");
-
-          if (statusPolling) {
-            clearInterval(statusPolling);
-            setStatusPolling(null);
-          }
-
-          setSending(false);
-          setCurrentlySending(null);
-          setCurrentDelayInfo(null);
-          setSentRecipients([]);
-          setFailedRecipients([]);
-          setRecipients([]);
-          setCampaignId(null);
-          setCampaignStatus(null);
-          setCampaignProgress({ sent: 0, failed: 0, total: 0 });
-
-          if (campaign.status === "completed") {
-            toast.success(
-              `✅ Campaign completed: ${campaign.progress.sent} sent, ${campaign.progress.failed} failed`
-            );
-          } else {
-            toast.info("Campaign was cancelled");
-          }
-
-          return;
-        }
-
-        setCampaignStatus(campaign.status);
-        setCampaignProgress(campaign.progress);
-        setSentRecipients(campaign.recipients.sent || []);
-        setFailedRecipients(campaign.recipients.failed || []);
-        if (campaign.status === "sending" || campaign.status === "paused") {
-          setRecipients(campaign.recipients.pending || []);
-        }
-      }
-    } catch (error) {
-      console.error("Status refresh error:", error);
-    }
-  }, [campaignId, statusPolling]);
-
-  // Start polling for campaign status updates (for immediate sending)
-  const startStatusPolling = useCallback(() => {
-    if (statusPolling) {
-      clearInterval(statusPolling);
-    }
-
-    const pollInterval = setInterval(async () => {
-      await refreshCampaignStatus();
-    }, 3000); // Poll every 3 seconds for immediate campaigns
-
-    setStatusPolling(pollInterval);
-  }, [refreshCampaignStatus]);
-
-  const stopStatusPolling = useCallback(() => {
-    if (statusPolling) {
-      clearInterval(statusPolling);
-      setStatusPolling(null);
-    }
-  }, [statusPolling]);
-
-  // Handle page visibility changes
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        if (
-          campaignId &&
-          (campaignStatus === "sending" || campaignStatus === "paused")
-        ) {
-          console.log("Tab visible again, checking campaign status...");
-
-          const recheckStatus = async () => {
-            const {
-              data: { session },
-            } = await supabase.auth.getSession();
-            if (session) {
-              await checkCampaignStatus(campaignId, session);
-            }
-          };
-
-          recheckStatus();
-        }
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [campaignId, campaignStatus]);
-
-  useEffect(() => {
-    return () => stopStatusPolling();
-  }, [stopStatusPolling]);
-
-  const handlePauseSending = async () => {
-    setIsPaused(true);
-
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      const response = await fetch("/api/campaigns/status", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          campaignId: campaignId,
-          action: "pause",
-        }),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        toast.info("Campaign paused");
-        setCampaignStatus("paused");
-      } else {
-        setIsPaused(false);
-        toast.error("Failed to pause campaign");
-      }
-    } catch (error) {
-      setIsPaused(false);
-      toast.error("Error pausing campaign");
-    }
+    setStatusInterval(interval);
+    console.log("✅ Status polling started");
   };
 
-  const handleResumeSending = async () => {
-    setIsPaused(false);
+  // FIXED: Add the missing handleStopCampaign function
+  const handleStopCampaign = async () => {
+    console.log("🛑 === STOP CAMPAIGN INITIATED ===");
+    console.log("🛑 Campaign ID to stop:", campaignId);
+    console.log("🛑 Current Status:", campaignStatus);
+    console.log("🛑 Status Interval Active:", !!statusInterval);
 
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      const response = await fetch("/api/campaigns/status", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          campaignId: campaignId,
-          action: "resume",
-        }),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        toast.info("Campaign resumed");
-        setCampaignStatus("sending");
-      } else {
-        setIsPaused(true);
-        toast.error("Failed to resume campaign");
-      }
-    } catch (error) {
-      setIsPaused(true);
-      toast.error("Error resuming campaign");
+    if (!campaignId) {
+      toast.error("No active campaign to stop");
+      console.error("❌ No campaignId found in state");
+      return;
     }
-  };
 
-  const handleStopSending = async () => {
     setShouldStop(true);
 
     try {
@@ -740,7 +296,16 @@ export default function EmailPage() {
         data: { session },
       } = await supabase.auth.getSession();
 
-      const response = await fetch("/api/campaigns/status", {
+      if (!session) {
+        toast.error("Please login again");
+        setShouldStop(false);
+        return;
+      }
+
+      console.log("📡 Sending POST to /api/campaigns/stop");
+      console.log("📡 Request body:", { campaignId });
+
+      const response = await fetch("/api/campaigns/stop", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -748,112 +313,72 @@ export default function EmailPage() {
         },
         body: JSON.stringify({
           campaignId: campaignId,
-          action: "cancel",
         }),
       });
 
+      console.log("📡 Response status:", response.status);
+
       const data = await response.json();
+      console.log("📡 Response data:", data);
 
       if (data.success) {
-        toast.info("Campaign cancelled");
-        setCampaignStatus("cancelled");
-        setSending(false);
-        stopStatusPolling();
+        console.log("✅ Stop request successful");
+        toast.success("Campaign stopped successfully");
+
+        // CRITICAL: Clear polling IMMEDIATELY
+        if (statusInterval) {
+          console.log("🧹 Clearing status polling interval");
+          clearInterval(statusInterval);
+          setStatusInterval(null);
+        } else {
+          console.log("ℹ️ No status polling was active");
+        }
+
+        // Reset ALL campaign-related state
+        console.log("🧹 Resetting all campaign state");
+        setCampaignStatus("stopped");
+        setCampaignId(null);
+        setCampaignProgress({ sent: 0, failed: 0, total: 0, pending: 0 });
+        setShouldStop(false);
+
+        console.log("✅ Campaign state reset successfully");
       } else {
         setShouldStop(false);
-        toast.error("Failed to cancel campaign");
+        toast.error(data.error || "Failed to stop campaign");
+        console.error("❌ Stop request failed:", data.error);
       }
     } catch (error) {
       setShouldStop(false);
-      toast.error("Error cancelling campaign");
+      toast.error("Error stopping campaign");
+      console.error("❌ Stop request error:", error);
+    }
+
+    console.log("🛑 === STOP CAMPAIGN COMPLETED ===");
+  };
+
+  const resetCampaign = () => {
+    console.log("🔄 Resetting campaign state");
+    setCampaignId(null);
+    setCampaignStatus(null);
+    setCampaignProgress({ total: 0, sent: 0, failed: 0, pending: 0 });
+    setRecipients([]);
+    setShouldStop(false);
+    if (statusInterval) {
+      console.log("🧹 Clearing interval during reset");
+      clearInterval(statusInterval);
+      setStatusInterval(null);
     }
   };
 
-  const handleRetryFailed = async (failedList) => {
-    if (!failedList || failedList.length === 0) return;
-
-    setRecipients((prev) => [...prev, ...failedList]);
-
-    setFailedRecipients((prev) =>
-      prev.filter(
-        (failed) => !failedList.find((retry) => retry.id === failed.id)
-      )
-    );
-
-    setCampaignProgress((prev) => ({
-      ...prev,
-      total: prev.total,
-    }));
-
-    toast.info(`${failedList.length} recipients moved back to queue`);
-  };
-
-  const handleRemoveRecipient = useCallback(
-    async (id) => {
-      if (
-        sending ||
-        campaignStatus === "sending" ||
-        campaignStatus === "paused"
-      ) {
-        toast.error("Cannot remove recipients during active campaign");
-        return;
-      }
-
-      if (id.toString().startsWith("failed-")) {
-        const actualId = id.replace("failed-", "");
-        setFailedRecipients((prev) =>
-          prev.filter((r) => r.id.toString() !== actualId)
-        );
-      } else {
-        const updatedRecipients = recipients.filter((r) => r.id !== id);
-        setRecipients(updatedRecipients);
-
-        console.log(
-          `🗑️ Removing recipient ${id}, saving ${updatedRecipients.length} recipients to database`
-        );
-
-        try {
-          const {
-            data: { session },
-          } = await supabase.auth.getSession();
-          if (!session) return;
-
-          const response = await fetch("/api/campaigns/draft", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${session.access_token}`,
-            },
-            body: JSON.stringify({
-              templateId: selectedTemplate,
-              resumeId: selectedResume,
-              recipients: updatedRecipients,
-              campaignName: null,
-            }),
-          });
-
-          const data = await response.json();
-          if (data.success) {
-            console.log("✅ Recipients deletion saved to database");
-            toast.success("Recipient removed");
-          } else {
-            console.error("❌ Failed to save deletion to database");
-            toast.error("Failed to save changes");
-          }
-        } catch (error) {
-          console.error("❌ Error saving deletion:", error);
-          toast.error("Error saving changes");
-        }
-      }
-    },
-    [recipients, sending, campaignStatus, selectedTemplate, selectedResume]
-  );
+  // Check if campaign can be started
+  const canStartCampaign =
+    selectedTemplate && recipients.length > 0 && !campaignStatus;
 
   if (!emailConfigured) {
     return (
       <div className="container mx-auto px-4 py-8">
         <h1 className="text-3xl font-bold text-gray-900 mb-8">
-          Send Email Campaign
+          Email Campaign
         </h1>
 
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 text-center">
@@ -863,8 +388,7 @@ export default function EmailPage() {
           </h2>
           <p className="text-yellow-700 mb-4">
             Before you can send emails, you need to configure your email
-            settings. This ensures emails are sent from your own email account
-            securely.
+            settings.
           </p>
           <Link href="/settings">
             <Button className="flex items-center mx-auto">
@@ -879,100 +403,165 @@ export default function EmailPage() {
 
   return (
     <div className="container mx-auto px-4 py-8">
-      <h1 className="text-3xl font-bold text-gray-900 mb-8">
-        Send Email Campaign
-      </h1>
+      <h1 className="text-3xl font-bold text-gray-900 mb-8">Email Campaign</h1>
 
-      {/* NEW: Background Campaign Status Bar */}
-      {showBackgroundStatus && (
-        <div className="mb-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center">
-              <div className="animate-spin mr-3">
-                <svg
-                  className="w-5 h-5 text-blue-600"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  ></circle>
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                  ></path>
-                </svg>
-              </div>
-              <div>
-                <h3 className="font-medium text-blue-900">
-                  Background Campaign Running
-                </h3>
-                <p className="text-sm text-blue-700">
-                  {campaignProgress.sent} sent, {campaignProgress.failed} failed
-                  {campaignProgress.total > 0 && (
-                    <span> of {campaignProgress.total} total</span>
-                  )}
-                </p>
-              </div>
+      {/* Debug Panel - Only in development */}
+      {process.env.NODE_ENV === "development" && (
+        <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <h3 className="font-bold text-yellow-800 mb-2">🐛 Debug Info:</h3>
+          <div className="grid grid-cols-2 gap-4 text-sm text-yellow-700">
+            <div>
+              <strong>Campaign ID:</strong> {campaignId || "null"}
             </div>
+            <div>
+              <strong>Campaign Status:</strong> {campaignStatus || "null"}
+            </div>
+            <div>
+              <strong>Status Interval:</strong>{" "}
+              {statusInterval ? "ACTIVE" : "INACTIVE"}
+            </div>
+            <div>
+              <strong>Should Stop:</strong> {shouldStop.toString()}
+            </div>
+            <div>
+              <strong>Recipients:</strong> {recipients.length}
+            </div>
+            <div>
+              <strong>Progress:</strong> {JSON.stringify(campaignProgress)}
+            </div>
+          </div>
+
+          <div className="mt-3 flex space-x-2">
             <button
-              onClick={() => setShowBackgroundStatus(false)}
-              className="text-blue-600 hover:text-blue-800 text-sm"
+              onClick={() => {
+                console.log("🔍 Current State:", {
+                  campaignId,
+                  campaignStatus,
+                  statusInterval: !!statusInterval,
+                  shouldStop,
+                  recipients: recipients.length,
+                  campaignProgress,
+                });
+              }}
+              className="px-3 py-1 bg-yellow-200 text-yellow-800 text-xs rounded hover:bg-yellow-300"
             >
-              Hide
+              Log State
+            </button>
+
+            {statusInterval && (
+              <button
+                onClick={() => {
+                  console.log("🛑 Force clearing interval");
+                  clearInterval(statusInterval);
+                  setStatusInterval(null);
+                  toast.info("Polling cleared");
+                }}
+                className="px-3 py-1 bg-red-200 text-red-800 text-xs rounded hover:bg-red-300"
+              >
+                Force Clear Polling
+              </button>
+            )}
+
+            <button
+              onClick={resetCampaign}
+              className="px-3 py-1 bg-blue-200 text-blue-800 text-xs rounded hover:bg-blue-300"
+            >
+              Reset State
             </button>
           </div>
         </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Campaign Setup */}
         <div>
-          <EmailForm
+          <CleanEmailForm
             templates={templates}
             resumes={resumes}
             selectedTemplate={selectedTemplate}
             selectedResume={selectedResume}
             onTemplateChange={setSelectedTemplate}
             onResumeChange={setSelectedResume}
-            onAddRecipient={handleAddRecipient}
+            onRecipientsReady={handleRecipientsReady}
+            recipientCount={recipients.length}
             loading={loading}
             dailyEmailCount={dailyEmailCount}
-            onBulkAdd={handleBulkAdd}
           />
         </div>
 
+        {/* Campaign Status */}
         <div>
-          <RecipientList
-            recipients={recipients}
-            onRemove={handleRemoveRecipient}
-            onSend={handleSendEmails}
-            selectedResume={selectedResume}
-            sending={sending}
-            currentlySending={currentlySending}
-            sentRecipients={sentRecipients}
-            failedRecipients={failedRecipients}
-            campaignProgress={campaignProgress}
-            onRetryFailed={handleRetryFailed}
-            onPauseSending={handlePauseSending}
-            onResumeSending={handleResumeSending}
-            isPaused={isPaused}
-            currentDelayInfo={currentDelayInfo}
-            campaignStatus={campaignStatus}
-            onStopSending={handleStopSending}
-            shouldStop={shouldStop}
-            forceStop={forceStop}
-            // NEW: Updated props for method selection
-            onSendMethodSelect={handleSendMethodSelect}
-            showMethodSelection={
-              recipients.length > 0 && !sending && !showBackgroundStatus
-            }
-          />
+          {campaignStatus ? (
+            <CampaignProgress
+              status={campaignStatus}
+              progress={campaignProgress}
+              onStop={handleStopCampaign}
+              onReset={resetCampaign}
+              shouldStop={shouldStop}
+            />
+          ) : (
+            <div className="bg-white rounded-lg shadow p-6">
+              <h2 className="text-xl font-semibold mb-4">Start Campaign</h2>
+
+              {recipients.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <AlertCircle className="w-12 h-12 mx-auto mb-4 text-gray-400" />
+                  <p>Add recipients to start your campaign</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Campaign Summary */}
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <h3 className="font-medium text-blue-900 mb-2">
+                      Campaign Ready
+                    </h3>
+                    <div className="text-sm text-blue-700 space-y-1">
+                      <div>
+                        📧 Template:{" "}
+                        {templates.find((t) => t.id === selectedTemplate)?.name}
+                      </div>
+                      <div>👥 Recipients: {recipients.length}</div>
+                      <div>
+                        📎 Resume:{" "}
+                        {selectedResume
+                          ? resumes.find((r) => r.id === selectedResume)
+                              ?.display_name
+                          : "No attachment"}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Resume Warning */}
+                  {!selectedResume && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                      <div className="flex items-center text-amber-800">
+                        <AlertCircle className="w-4 h-4 mr-2" />
+                        <span className="text-sm">
+                          No resume selected - emails will be sent without
+                          attachment
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Start Button */}
+                  <Button
+                    onClick={handleStartCampaign}
+                    disabled={!canStartCampaign}
+                    className="w-full flex items-center justify-center"
+                  >
+                    <CheckCircle className="w-4 h-4 mr-2" />
+                    Start Campaign
+                  </Button>
+
+                  <p className="text-xs text-gray-500 text-center">
+                    Campaign will run in the background. You can close this page
+                    safely.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
