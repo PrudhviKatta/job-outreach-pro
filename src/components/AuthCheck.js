@@ -1,82 +1,40 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useSession } from "next-auth/react";
 import { useRouter, usePathname } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { useEffect } from "react";
 
 export default function AuthCheck({ children }) {
+  const { data: session, status } = useSession();
   const router = useRouter();
   const pathname = usePathname();
-  const [loading, setLoading] = useState(true);
-  const [user, setUser] = useState(null);
 
-  const checkUser = useCallback(async () => {
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      console.log("Initial session check:", session);
-
-      setUser(session?.user);
-
-      const isAuthPage = pathname.startsWith("/auth/") || pathname === "/";
-
-      if (!session && !isAuthPage) {
-        router.push("/auth/login");
-      } else if (
-        session &&
-        (pathname.startsWith("/auth/") || pathname === "/")
-      ) {
-        router.push("/dashboard");
-      }
-    } catch (error) {
-      console.error("Auth check error:", error);
-    } finally {
-      setLoading(false);
-    }
-  }, [pathname, router]);
+  const isAuthPage =
+    pathname?.startsWith("/auth/login") ||
+    pathname?.startsWith("/auth/signup");
+  const isPublicPage = pathname === "/";
 
   useEffect(() => {
-    checkUser();
+    if (status === "loading") return;
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log("Auth event:", event, session);
+    if (!session && !isAuthPage && !isPublicPage) {
+      router.push("/auth/login");
+    }
 
-      if (event === "SIGNED_IN") {
-        setUser(session?.user);
-        setTimeout(() => {
-          if (pathname.startsWith("/auth/")) {
-            router.push("/dashboard");
-          }
-        }, 100);
-      } else if (event === "SIGNED_OUT") {
-        setUser(null);
-        router.push("/auth/login");
-      }
-    });
+    if (session && isAuthPage) {
+      router.push("/dashboard");
+    }
+  }, [session, status, isAuthPage, isPublicPage, router]);
 
-    return () => subscription.unsubscribe();
-  }, [checkUser, pathname, router]);
-
-  if (loading) {
+  if (status === "loading") {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg">Loading...</div>
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
       </div>
     );
   }
 
-  if (pathname.startsWith("/auth/") || pathname === "/") {
-    return children;
-  }
-
-  if (!user) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg">Redirecting to login...</div>
-      </div>
-    );
+  if (!session && !isAuthPage && !isPublicPage) {
+    return null;
   }
 
   return children;

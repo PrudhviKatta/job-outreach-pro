@@ -1,8 +1,8 @@
 "use client";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { Home, Send, Users, FileText, Settings, LogOut } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { usePathname } from "next/navigation";
+import { Home, Send, FileText, Settings, LogOut } from "lucide-react";
+import { signOut } from "next-auth/react";
 
 export default function MobileNav() {
   const pathname = usePathname();
@@ -15,11 +15,8 @@ export default function MobileNav() {
     { name: "Logout", href: "#", icon: LogOut, action: "logout" },
   ];
 
-  const router = useRouter();
-
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push("/auth/login");
+    await signOut({ callbackUrl: "/auth/login" });
   };
 
   return (
@@ -39,9 +36,8 @@ export default function MobileNav() {
             <Link
               key={item.name}
               href={item.href}
-              className={`flex flex-col items-center py-2 px-3 ${
-                pathname === item.href ? "text-indigo-600" : "text-gray-600"
-              }`}
+              className={`flex flex-col items-center py-2 px-3 ${pathname === item.href ? "text-indigo-600" : "text-gray-600"
+                }`}
             >
               <item.icon className="h-6 w-6" />
               <span className="text-xs mt-1">{item.name}</span>

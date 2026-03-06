@@ -1,767 +1,484 @@
-// src/app/settings/page.js
 "use client";
-import { useState, useEffect } from "react";
-import { supabase } from "@/lib/supabase";
+import { useState, useEffect, useRef } from "react";
+import { useSession } from "next-auth/react";
+import toast from "react-hot-toast";
 import {
-  Save,
+  Mail,
+  Clock,
   Upload,
   Trash2,
-  Plus,
-  Mail,
   CheckCircle,
-  AlertCircle,
-  ExternalLink,
-  Shield,
+  AlertTriangle,
+  Star,
+  FileText,
+  Save,
 } from "lucide-react";
 import Button from "@/components/UI/Button";
-import toast from "react-hot-toast";
 
 export default function SettingsPage() {
-  const [settings, setSettings] = useState({
-    default_resume_id: "",
-    send_delay_min: 8,
-    send_delay_max: 20,
-    business_hours_only: true,
-    follow_up_days: 3,
-    delay_preset: "moderate", // New field for preset selection
+  const { data: session } = useSession();
+  const fileInputRef = useRef(null);
+
+  // General settings
+  const [generalSettings, setGeneralSettings] = useState({
+    delayPreset: "moderate",
+    sendDelayMin: 8,
+    sendDelayMax: 20,
+    businessHoursOnly: true,
+    followUpDays: 3,
+    defaultResumeId: "",
   });
+
+  // Email settings
   const [emailSettings, setEmailSettings] = useState({
-    sender_email: "",
-    email_configured: false,
-    email_verified: false,
-    email_verification_error: null,
-    last_verified_at: null,
-  });
-  const [emailForm, setEmailForm] = useState({
     senderEmail: "",
     appPassword: "",
+    emailConfigured: false,
+    emailVerified: false,
   });
+
+  // Resumes
   const [resumes, setResumes] = useState([]);
-  const [customFields, setCustomFields] = useState([]);
-  const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [emailLoading, setEmailLoading] = useState(false);
-  const [testingConnection, setTestingConnection] = useState(false);
-  const [resumeLabel, setResumeLabel] = useState("");
-  const [showEmailForm, setShowEmailForm] = useState(false);
-  const [delayWarning, setDelayWarning] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [testingEmail, setTestingEmail] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
-    fetchSettings();
-  }, []);
+    if (session) {
+      fetchSettings();
+      fetchResumes();
+    }
+  }, [session]);
 
   const fetchSettings = async () => {
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      // Fetch user settings
-      const { data: settingsData } = await supabase
-        .from("user_settings")
-        .select("*")
-        .eq("user_id", user.id)
-        .single();
-
-      if (settingsData) {
-        setSettings(settingsData);
+      const res = await fetch("/api/email/settings");
+      const data = await res.json();
+      if (data.success && data.data) {
+        setEmailSettings((prev) => ({
+          ...prev,
+          senderEmail: data.data.senderEmail || "",
+          emailConfigured: data.data.emailConfigured || false,
+          emailVerified: data.data.emailVerified || false,
+        }));
       }
-
-      // Fetch email settings
-      const emailResponse = await fetch("/api/email/settings", {
-        headers: {
-          Authorization: `Bearer ${session?.access_token}`,
-        },
-      });
-
-      if (emailResponse.ok) {
-        const emailData = await emailResponse.json();
-        if (emailData.success) {
-          setEmailSettings(emailData.data);
-          setEmailForm({
-            senderEmail: emailData.data.sender_email || "",
-            appPassword: "",
-          });
-        }
-      }
-
-      // Fetch resumes
-      const { data: resumesData } = await supabase
-        .from("resumes")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      setResumes(resumesData || []);
-
-      // Fetch custom fields
-      const { data: fieldsData } = await supabase
-        .from("custom_fields")
-        .select("*")
-        .order("order_index", { ascending: true });
-
-      setCustomFields(fieldsData || []);
     } catch (error) {
-      toast.error("Error loading settings");
+      console.error("Error fetching settings:", error);
     } finally {
       setLoading(false);
     }
   };
 
-  // Add these functions before handleSaveSettings
-  const validateDelaySettings = (min, max) => {
-    if (min < 3) {
-      return "🚨 Minimum too low - may look automated to email providers";
-    }
-    if (max > 60) {
-      return "⏰ High delays will make campaigns very slow";
-    }
-    if (min < 5 || max < 10) {
-      return "⚠️ Very fast sending may trigger spam filters";
-    }
-    if (max - min < 2) {
-      return "📊 Gap between min/max should be at least 2 seconds for randomness";
-    }
-    return "";
-  };
-
-  const handlePresetChange = (preset) => {
-    const presets = {
-      fast: { min: 3, max: 8 },
-      moderate: { min: 8, max: 20 },
-      conservative: { min: 20, max: 45 },
-      custom: { min: settings.send_delay_min, max: settings.send_delay_max },
-    };
-
-    setSettings({
-      ...settings,
-      delay_preset: preset,
-      send_delay_min: presets[preset].min,
-      send_delay_max: presets[preset].max,
-    });
-
-    if (preset !== "custom") {
-      setDelayWarning(
-        validateDelaySettings(presets[preset].min, presets[preset].max)
-      );
-    }
-  };
-
-  const handleSaveSettings = async () => {
+  const fetchResumes = async () => {
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const res = await fetch("/api/resumes");
+      const data = await res.json();
+      if (data.success) {
+        setResumes(data.data);
+      }
+    } catch (error) {
+      console.error("Error fetching resumes:", error);
+    }
+  };
 
-      const { error } = await supabase.from("user_settings").upsert({
-        user_id: user.id,
-        ...settings,
+  // Delay presets
+  const delayPresets = {
+    fast: { min: 3, max: 8, label: "Fast (3-8s)" },
+    moderate: { min: 8, max: 20, label: "Moderate (8-20s)" },
+    conservative: { min: 20, max: 45, label: "Conservative (20-45s)" },
+    custom: { min: generalSettings.sendDelayMin, max: generalSettings.sendDelayMax, label: "Custom" },
+  };
+
+  const handleDelayPreset = (preset) => {
+    const presetValues = delayPresets[preset];
+    if (preset !== "custom") {
+      setGeneralSettings({
+        ...generalSettings,
+        delayPreset: preset,
+        sendDelayMin: presetValues.min,
+        sendDelayMax: presetValues.max,
       });
+    } else {
+      setGeneralSettings({ ...generalSettings, delayPreset: preset });
+    }
+  };
 
-      if (error) throw error;
-      toast.success("Settings saved!");
+  const handleSaveGeneral = async () => {
+    setSaving(true);
+    try {
+      // Validate
+      if (generalSettings.sendDelayMin >= generalSettings.sendDelayMax) {
+        toast.error("Min delay must be less than max delay");
+        return;
+      }
+
+      const res = await fetch("/api/settings/general", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(generalSettings),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Settings saved!");
+      } else {
+        toast.error(data.error || "Failed to save");
+      }
     } catch (error) {
       toast.error("Error saving settings");
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleSaveEmailSettings = async (testConnection = false) => {
-    if (!emailForm.senderEmail || !emailForm.appPassword) {
-      toast.error("Please fill in both email and app password");
+  const handleSaveEmail = async (testConnection = false) => {
+    if (!emailSettings.senderEmail || !emailSettings.appPassword) {
+      toast.error("Email and app password are required");
       return;
     }
 
-    if (testConnection) {
-      setTestingConnection(true);
-    } else {
-      setEmailLoading(true);
-    }
+    if (testConnection) setTestingEmail(true);
+    else setSaving(true);
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      const response = await fetch("/api/email/settings", {
+      const res = await fetch("/api/email/settings", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session?.access_token}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          senderEmail: emailForm.senderEmail,
-          appPassword: emailForm.appPassword,
+          senderEmail: emailSettings.senderEmail,
+          appPassword: emailSettings.appPassword,
           testConnection,
         }),
       });
-
-      const data = await response.json();
-
+      const data = await res.json();
       if (data.success) {
         toast.success(data.message);
-        setShowEmailForm(false);
-        fetchSettings(); // Refresh settings
+        setEmailSettings((prev) => ({
+          ...prev,
+          emailConfigured: true,
+          emailVerified: data.verified,
+        }));
       } else {
         toast.error(data.error || "Failed to save email settings");
       }
     } catch (error) {
       toast.error("Error saving email settings");
     } finally {
-      setEmailLoading(false);
-      setTestingConnection(false);
+      setSaving(false);
+      setTestingEmail(false);
     }
   };
 
   const handleResumeUpload = async (e) => {
-    const file = e.target.files[0];
+    const file = e.target.files?.[0];
     if (!file) return;
 
     setUploading(true);
     try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      const fileName = `${user.id}/${Date.now()}_${file.name}`;
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("displayName", file.name);
 
-      // Upload file to Supabase Storage
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from("resumes")
-        .upload(fileName, file);
-
-      if (uploadError) throw uploadError;
-
-      // Get public URL
-      const {
-        data: { publicUrl },
-      } = supabase.storage.from("resumes").getPublicUrl(fileName);
-
-      // Save to database
-      const { error: dbError } = await supabase.from("resumes").insert({
-        user_id: user.id,
-        display_name: resumeLabel,
-        file_url: publicUrl,
-        file_name: file.name,
-        file_size: file.size,
+      const res = await fetch("/api/resumes/upload", {
+        method: "POST",
+        body: formData,
       });
-
-      if (dbError) throw dbError;
-
-      toast.success("Resume uploaded!");
-      fetchSettings();
-      setResumeLabel("");
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Resume uploaded!");
+        fetchResumes();
+      } else {
+        toast.error(data.error || "Upload failed");
+      }
     } catch (error) {
       toast.error("Error uploading resume");
     } finally {
       setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
   const handleDeleteResume = async (id) => {
-    if (!confirm("Are you sure you want to delete this resume?")) return;
-
+    if (!confirm("Delete this resume?")) return;
     try {
-      const { error } = await supabase.from("resumes").delete().eq("id", id);
-
-      if (error) throw error;
-      toast.success("Resume deleted!");
-      fetchSettings();
+      const res = await fetch(`/api/resumes?id=${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Resume deleted");
+        fetchResumes();
+      }
     } catch (error) {
       toast.error("Error deleting resume");
     }
   };
 
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+      </div>
+    );
+  }
+
   return (
-    <div className="container mx-auto px-4 py-8">
-      <h1 className="text-3xl font-bold text-gray-900 mb-8">Settings</h1>
+    <div className="space-y-8 max-w-4xl mx-auto">
+      <h1 className="text-3xl font-bold text-gray-900">Settings</h1>
+
       {/* Email Configuration */}
-      <div className="bg-white p-6 rounded-lg shadow-md mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold flex items-center">
-            <Mail className="w-5 h-5 mr-2" />
-            Email Configuration
-          </h2>
-          {emailSettings.email_configured && (
-            <div className="flex items-center text-sm">
-              {emailSettings.email_verified ? (
-                <div className="flex items-center text-green-600">
-                  <CheckCircle className="w-4 h-4 mr-1" />
-                  Verified
-                </div>
-              ) : (
-                <div className="flex items-center text-yellow-600">
-                  <AlertCircle className="w-4 h-4 mr-1" />
-                  Not Verified
-                </div>
-              )}
-            </div>
-          )}
+      <div className="bg-white rounded-lg shadow-md p-6">
+        <h2 className="text-xl font-semibold mb-6 flex items-center">
+          <Mail className="w-5 h-5 mr-2 text-indigo-600" />
+          Email Configuration
+        </h2>
+
+        {emailSettings.emailVerified && (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-4 flex items-center">
+            <CheckCircle className="w-4 h-4 text-green-600 mr-2" />
+            <span className="text-green-800 text-sm">Email verified and ready</span>
+          </div>
+        )}
+
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Sender Email
+            </label>
+            <input
+              type="email"
+              value={emailSettings.senderEmail}
+              onChange={(e) =>
+                setEmailSettings({ ...emailSettings, senderEmail: e.target.value })
+              }
+              placeholder="your.email@gmail.com"
+              className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              App Password
+            </label>
+            <input
+              type="password"
+              value={emailSettings.appPassword}
+              onChange={(e) =>
+                setEmailSettings({ ...emailSettings, appPassword: e.target.value })
+              }
+              placeholder="Your app-specific password"
+              className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Use an app-specific password, not your main password.
+              <a
+                href="https://myaccount.google.com/apppasswords"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-indigo-600 ml-1"
+              >
+                Generate for Gmail →
+              </a>
+            </p>
+          </div>
+
+          <div className="flex space-x-3">
+            <Button onClick={() => handleSaveEmail(true)} disabled={testingEmail}>
+              {testingEmail ? "Testing..." : "Save & Test Connection"}
+            </Button>
+            <Button
+              onClick={() => handleSaveEmail(false)}
+              variant="secondary"
+              disabled={saving}
+            >
+              Save Without Testing
+            </Button>
+          </div>
         </div>
-
-        {!emailSettings.email_configured ? (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
-            <div className="flex items-start">
-              <AlertCircle className="w-5 h-5 text-yellow-600 mt-0.5 mr-2" />
-              <div>
-                <h3 className="font-medium text-yellow-800">
-                  Email Configuration Required
-                </h3>
-                <p className="text-yellow-700 text-sm mt-1">
-                  You need to configure your email settings before sending any
-                  emails. This ensures emails are sent from your own email
-                  account.
-                </p>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="bg-gray-50 rounded-lg p-4 mb-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium">
-                  Current Email: {emailSettings.sender_email}
-                </p>
-                {emailSettings.last_verified_at && (
-                  <p className="text-sm text-gray-600">
-                    Last verified:{" "}
-                    {new Date(
-                      emailSettings.last_verified_at
-                    ).toLocaleDateString()}
-                  </p>
-                )}
-                {emailSettings.email_verification_error && (
-                  <p className="text-sm text-red-600 mt-1">
-                    Error: {emailSettings.email_verification_error}
-                  </p>
-                )}
-              </div>
-              <Button
-                onClick={() => setShowEmailForm(true)}
-                variant="outline"
-                size="sm"
-              >
-                Update
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {(!emailSettings.email_configured || showEmailForm) && (
-          <div className="space-y-4">
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <div className="flex items-start">
-                <Shield className="w-5 h-5 text-blue-600 mt-0.5 mr-2" />
-                <div>
-                  <h3 className="font-medium text-blue-800">
-                    Security & Privacy
-                  </h3>
-                  <p className="text-blue-700 text-sm mt-1">
-                    Your app password is encrypted using AES-256 encryption and
-                    stored securely. We never store your actual password in
-                    plain text.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Sender Email Address *
-              </label>
-              <input
-                type="email"
-                value={emailForm.senderEmail}
-                onChange={(e) =>
-                  setEmailForm({ ...emailForm, senderEmail: e.target.value })
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                placeholder="your.email@gmail.com"
-                required
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                App Password *
-              </label>
-              <input
-                type="password"
-                value={emailForm.appPassword}
-                onChange={(e) =>
-                  setEmailForm({ ...emailForm, appPassword: e.target.value })
-                }
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                placeholder="Your 16-character app password"
-                required
-              />
-
-              <div className="mt-3 p-4 bg-gray-50 rounded-lg">
-                <h4 className="font-medium text-gray-900 mb-2">
-                  What is an App Password?
-                </h4>
-                <p className="text-sm text-gray-700 mb-3">
-                  An app password is a secure way to let third-party apps access
-                  your email without sharing your main password. It&apos;s
-                  required when you have 2-factor authentication enabled.
-                </p>
-
-                <div className="space-y-2 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">Gmail:</span>
-                    <a
-                      href="https://support.google.com/accounts/answer/185833"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-indigo-600 hover:text-indigo-700 flex items-center"
-                    >
-                      Setup Guide <ExternalLink className="w-3 h-3 ml-1" />
-                    </a>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">Outlook:</span>
-                    <a
-                      href="https://support.microsoft.com/en-us/account-billing/using-app-passwords-with-apps-that-don-t-support-two-step-verification-5896ed9b-4263-e681-128a-a6f2979a7944"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-indigo-600 hover:text-indigo-700 flex items-center"
-                    >
-                      Setup Guide <ExternalLink className="w-3 h-3 ml-1" />
-                    </a>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium">Yahoo:</span>
-                    <a
-                      href="https://help.yahoo.com/kb/generate-manage-third-party-passwords-sln15241.html"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-indigo-600 hover:text-indigo-700 flex items-center"
-                    >
-                      Setup Guide <ExternalLink className="w-3 h-3 ml-1" />
-                    </a>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex space-x-3">
-              <Button
-                onClick={() => handleSaveEmailSettings(true)}
-                disabled={testingConnection || emailLoading}
-                className="flex items-center"
-              >
-                {testingConnection ? "Testing..." : "Test & Save"}
-              </Button>
-              <Button
-                onClick={() => handleSaveEmailSettings(false)}
-                disabled={testingConnection || emailLoading}
-                variant="outline"
-              >
-                {emailLoading ? "Saving..." : "Save Without Test"}
-              </Button>
-              {showEmailForm && emailSettings.email_configured && (
-                <Button
-                  onClick={() => setShowEmailForm(false)}
-                  variant="outline"
-                >
-                  Cancel
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* Email Settings */}
-      <div className="bg-white p-6 rounded-lg shadow-md mb-8">
-        <h2 className="text-xl font-semibold mb-4">Email Sending Settings</h2>
+      {/* Sending Speed */}
+      <div className="bg-white rounded-lg shadow-md p-6">
+        <h2 className="text-xl font-semibold mb-6 flex items-center">
+          <Clock className="w-5 h-5 mr-2 text-indigo-600" />
+          Sending Speed
+        </h2>
 
-        <div className="space-y-6">
-          {/* Delay Presets */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-3">
-              Email Sending Speed
-            </label>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+          {Object.entries(delayPresets).map(([key, preset]) => (
+            <button
+              key={key}
+              onClick={() => handleDelayPreset(key)}
+              className={`p-3 rounded-lg border text-sm font-medium transition-colors ${generalSettings.delayPreset === key
+                  ? "border-indigo-500 bg-indigo-50 text-indigo-700"
+                  : "border-gray-200 text-gray-700 hover:border-gray-300"
+                }`}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
 
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 gap-3">
-                <label className="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="delay_preset"
-                    value="fast"
-                    checked={settings.delay_preset === "fast"}
-                    onChange={(e) => handlePresetChange(e.target.value)}
-                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <div className="ml-3 flex-1">
-                    <div className="flex items-center">
-                      <span className="text-2xl mr-2">🚀</span>
-                      <span className="font-medium">Fast (3-8 seconds)</span>
-                    </div>
-                    <p className="text-sm text-gray-600 mt-1">
-                      Quick sending, minimal delays
-                    </p>
-                  </div>
-                </label>
-
-                <label className="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="delay_preset"
-                    value="moderate"
-                    checked={settings.delay_preset === "moderate"}
-                    onChange={(e) => handlePresetChange(e.target.value)}
-                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <div className="ml-3 flex-1">
-                    <div className="flex items-center">
-                      <span className="text-2xl mr-2">⚡</span>
-                      <span className="font-medium">
-                        Moderate (8-20 seconds)
-                      </span>
-                      <span className="ml-2 px-2 py-1 bg-indigo-100 text-indigo-700 text-xs rounded-full">
-                        Recommended
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-600 mt-1">
-                      Balanced speed and safety
-                    </p>
-                  </div>
-                </label>
-
-                <label className="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="delay_preset"
-                    value="conservative"
-                    checked={settings.delay_preset === "conservative"}
-                    onChange={(e) => handlePresetChange(e.target.value)}
-                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <div className="ml-3 flex-1">
-                    <div className="flex items-center">
-                      <span className="text-2xl mr-2">🛡️</span>
-                      <span className="font-medium">
-                        Conservative (20-45 seconds)
-                      </span>
-                    </div>
-                    <p className="text-sm text-gray-600 mt-1">
-                      Extra cautious, very human-like
-                    </p>
-                  </div>
-                </label>
-
-                <label className="flex items-center p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="delay_preset"
-                    value="custom"
-                    checked={settings.delay_preset === "custom"}
-                    onChange={(e) => handlePresetChange(e.target.value)}
-                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <div className="ml-3 flex-1">
-                    <div className="flex items-center">
-                      <span className="text-2xl mr-2">⚙️</span>
-                      <span className="font-medium">Custom</span>
-                    </div>
-                    <p className="text-sm text-gray-600 mt-1">
-                      Set your own range
-                    </p>
-                  </div>
-                </label>
-              </div>
+        {generalSettings.delayPreset === "custom" && (
+          <div className="grid grid-cols-2 gap-4 mt-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Min Delay (seconds)
+              </label>
+              <input
+                type="number"
+                value={generalSettings.sendDelayMin}
+                onChange={(e) =>
+                  setGeneralSettings({
+                    ...generalSettings,
+                    sendDelayMin: parseInt(e.target.value) || 1,
+                  })
+                }
+                min={1}
+                className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Max Delay (seconds)
+              </label>
+              <input
+                type="number"
+                value={generalSettings.sendDelayMax}
+                onChange={(e) =>
+                  setGeneralSettings({
+                    ...generalSettings,
+                    sendDelayMax: parseInt(e.target.value) || 5,
+                  })
+                }
+                min={2}
+                className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
             </div>
           </div>
+        )}
 
-          {/* Custom Delay Inputs */}
-          {settings.delay_preset === "custom" && (
-            <div className="bg-gray-50 p-4 rounded-lg">
-              <h3 className="text-sm font-medium text-gray-700 mb-3">
-                Custom Delay Range
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Minimum Delay (seconds)
-                  </label>
-                  <input
-                    type="number"
-                    value={settings.send_delay_min}
-                    onChange={(e) => {
-                      const newMin = parseInt(e.target.value) || 0;
-                      setSettings({
-                        ...settings,
-                        send_delay_min: newMin,
-                      });
-                      setDelayWarning(
-                        validateDelaySettings(newMin, settings.send_delay_max)
-                      );
-                    }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                    min="3"
-                    max="60"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Maximum Delay (seconds)
-                  </label>
-                  <input
-                    type="number"
-                    value={settings.send_delay_max}
-                    onChange={(e) => {
-                      const newMax = parseInt(e.target.value) || 0;
-                      setSettings({
-                        ...settings,
-                        send_delay_max: newMax,
-                      });
-                      setDelayWarning(
-                        validateDelaySettings(settings.send_delay_min, newMax)
-                      );
-                    }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                    min="3"
-                    max="60"
-                  />
-                </div>
-              </div>
-
-              <p className="text-xs text-gray-500 mt-2">
-                Range: 3-60 seconds. Random delay will be picked between your
-                min and max values.
-              </p>
-            </div>
-          )}
-
-          {/* Warning Message */}
-          {delayWarning && (
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-              <p className="text-yellow-800 text-sm">{delayWarning}</p>
-            </div>
-          )}
+        <div className="mt-4 space-y-3">
+          <label className="flex items-center">
+            <input
+              type="checkbox"
+              checked={generalSettings.businessHoursOnly}
+              onChange={(e) =>
+                setGeneralSettings({
+                  ...generalSettings,
+                  businessHoursOnly: e.target.checked,
+                })
+              }
+              className="rounded border-gray-300 text-indigo-600 mr-2"
+            />
+            <span className="text-sm text-gray-700">
+              Send during business hours only (9am-5pm)
+            </span>
+          </label>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Follow-up Reminder After (days)
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Follow-up Reminder (days)
             </label>
             <input
               type="number"
-              value={settings.follow_up_days}
+              value={generalSettings.followUpDays}
               onChange={(e) =>
-                setSettings({
-                  ...settings,
-                  follow_up_days: parseInt(e.target.value),
+                setGeneralSettings({
+                  ...generalSettings,
+                  followUpDays: parseInt(e.target.value) || 3,
                 })
               }
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-              min="1"
-              max="30"
+              min={1}
+              max={30}
+              className="w-32 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
-          </div>
-
-          <div className="flex items-center">
-            <input
-              type="checkbox"
-              id="business-hours"
-              checked={settings.business_hours_only}
-              onChange={(e) =>
-                setSettings({
-                  ...settings,
-                  business_hours_only: e.target.checked,
-                })
-              }
-              className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-            />
-            <label
-              htmlFor="business-hours"
-              className="ml-2 text-sm text-gray-700"
-            >
-              Send emails during business hours only (9 AM - 6 PM)
-            </label>
           </div>
         </div>
 
-        <Button onClick={handleSaveSettings} className="mt-6 flex items-center">
+        <Button onClick={handleSaveGeneral} disabled={saving} className="mt-4">
           <Save className="w-4 h-4 mr-2" />
-          Save Settings
+          {saving ? "Saving..." : "Save Settings"}
         </Button>
       </div>
 
       {/* Resume Management */}
-      <div className="bg-white p-6 rounded-lg shadow-md">
-        <h2 className="text-xl font-semibold mb-4">Resume Management</h2>
+      <div className="bg-white rounded-lg shadow-md p-6">
+        <h2 className="text-xl font-semibold mb-6 flex items-center">
+          <FileText className="w-5 h-5 mr-2 text-indigo-600" />
+          Resumes ({resumes.length}/10)
+        </h2>
 
-        <div className="space-y-3 mb-6">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Resume Label *
-            </label>
-            <input
-              type="text"
-              value={resumeLabel}
-              onChange={(e) => setResumeLabel(e.target.value)}
-              placeholder="e.g. Frontend Developer Resume"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Upload Resume File *
-            </label>
-            <input
-              type="file"
-              accept=".pdf,.doc,.docx"
-              onChange={handleResumeUpload}
-              disabled={uploading || !resumeLabel || resumes.length >= 10}
-              className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed file:disabled:bg-gray-100 file:disabled:text-gray-400"
-            />
-            {resumes.length >= 10 && (
-              <p className="text-sm text-red-600 mt-1">
-                Maximum 10 resumes allowed
-              </p>
-            )}{" "}
-          </div>
-        </div>
-
-        <div className="space-y-3">
+        <div className="space-y-3 mb-4">
           {resumes.map((resume) => (
             <div
               key={resume.id}
-              className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+              className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-200"
             >
               <div className="flex items-center">
-                <input
-                  type="radio"
-                  name="default-resume"
-                  checked={settings.default_resume_id === resume.id}
-                  onChange={() =>
-                    setSettings({ ...settings, default_resume_id: resume.id })
-                  }
-                  className="h-4 w-4 text-indigo-600 focus:ring-indigo-500"
-                />
-                <div className="ml-3">
-                  <span className="text-sm font-medium">
-                    {resume.display_name}
-                    {settings.default_resume_id === resume.id && " ⭐"}
-                  </span>
-                  <p className="text-xs text-gray-500 mt-1">
-                    File: {resume.file_name}
+                <FileText className="w-4 h-4 text-gray-500 mr-3" />
+                <div>
+                  <p className="font-medium text-sm">{resume.displayName}</p>
+                  <p className="text-xs text-gray-500">
+                    {resume.fileSize
+                      ? `${(resume.fileSize / 1024).toFixed(1)} KB`
+                      : ""}
                   </p>
                 </div>
               </div>
-              <button
-                onClick={() => handleDeleteResume(resume.id)}
-                className="text-red-600 hover:text-red-700"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
+              <div className="flex items-center space-x-2">
+                {generalSettings.defaultResumeId === resume.id && (
+                  <span className="flex items-center text-xs text-yellow-600">
+                    <Star className="w-3 h-3 mr-1" />
+                    Default
+                  </span>
+                )}
+                <button
+                  onClick={() =>
+                    setGeneralSettings({
+                      ...generalSettings,
+                      defaultResumeId: resume.id,
+                    })
+                  }
+                  className="text-xs text-gray-500 hover:text-indigo-600"
+                >
+                  Set Default
+                </button>
+                <button
+                  onClick={() => handleDeleteResume(resume.id)}
+                  className="text-red-500 hover:text-red-700"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           ))}
+        </div>
+
+        {resumes.length === 0 && (
+          <p className="text-gray-500 text-sm mb-4">No resumes uploaded yet.</p>
+        )}
+
+        <div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.doc,.docx"
+            onChange={handleResumeUpload}
+            className="hidden"
+          />
+          <Button
+            onClick={() => fileInputRef.current?.click()}
+            variant="outline"
+            disabled={uploading || resumes.length >= 10}
+          >
+            <Upload className="w-4 h-4 mr-2" />
+            {uploading ? "Uploading..." : "Upload Resume"}
+          </Button>
+          {resumes.length >= 10 && (
+            <p className="text-xs text-amber-600 mt-1">
+              <AlertTriangle className="w-3 h-3 inline mr-1" />
+              Maximum 10 resumes reached
+            </p>
+          )}
         </div>
       </div>
     </div>

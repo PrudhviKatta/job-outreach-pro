@@ -1,195 +1,105 @@
-// /api/campaigns/start-clean/route.js - Simple, reliable campaign start
+// src/app/api/campaigns/start-clean/route.js
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
+import { requireAuth } from "@/lib/middleware";
+import { prisma } from "@/lib/db";
 import { sendEmail, replaceVariables, decryptPassword } from "@/lib/email";
 import { generateTrackingId } from "@/lib/utils";
 
 export async function POST(request) {
   try {
-    const { templateId, resumeId, recipients } = await request.json();
+    const { user, error } = await requireAuth();
+    if (error) return error;
 
-    console.log(`🚀 Starting clean campaign: ${recipients.length} recipients`);
+    const { templateId, resumeId, recipients, campaignName } =
+      await request.json();
 
-    // Get user authentication
-    const authHeader = request.headers.get("authorization");
-    let token = authHeader?.replace("Bearer ", "");
-
-    if (!token) {
-      const cookies = request.headers.get("cookie");
-      if (cookies) {
-        const authCookie = cookies
-          .split(";")
-          .find((c) => c.trim().startsWith("sb-"))
-          ?.split("=")[1];
-        if (authCookie) {
-          try {
-            const parsed = JSON.parse(decodeURIComponent(authCookie));
-            token = parsed.access_token;
-          } catch (e) {
-            console.log("Could not parse auth cookie");
-          }
-        }
-      }
-    }
-
-    const supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_KEY
-    );
-
-    let user;
-    if (token) {
-      const { data: userData, error: userError } = await supabase.auth.getUser(
-        token
-      );
-      if (!userError && userData?.user) {
-        user = userData.user;
-      }
-    }
-
-    if (!user) {
-      return NextResponse.json(
-        { success: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
-
-    // Validate inputs
     if (!templateId || !recipients || recipients.length === 0) {
       return NextResponse.json(
-        { success: false, error: "Missing required fields" },
+        { success: false, error: "Template and recipients are required" },
         { status: 400 }
       );
     }
 
     if (recipients.length > 500) {
       return NextResponse.json(
-        { success: false, error: "Maximum 500 recipients allowed" },
+        { success: false, error: "Maximum 500 recipients per campaign" },
         { status: 400 }
       );
     }
 
-    // Get template
-    const { data: template, error: templateError } = await supabaseAdmin
-      .from("templates")
-      .select("*")
-      .eq("id", templateId)
-      .eq("user_id", user.id)
-      .single();
+    // Fetch template
+    const template = await prisma.template.findFirst({
+      where: { id: templateId, userId: user.id },
+    });
 
-    if (templateError) {
+    if (!template) {
       return NextResponse.json(
         { success: false, error: "Template not found" },
         { status: 404 }
       );
     }
 
-    // Get resume (if provided)
+    // Fetch resume if selected
     let resume = null;
     if (resumeId) {
-      const { data: resumeData, error: resumeError } = await supabaseAdmin
-        .from("resumes")
-        .select("*")
-        .eq("id", resumeId)
-        .eq("user_id", user.id)
-        .single();
-
-      if (resumeError) {
-        console.warn("Resume not found, continuing without attachment");
-      } else {
-        resume = resumeData;
-      }
+      resume = await prisma.resume.findFirst({
+        where: { id: resumeId, userId: user.id },
+      });
     }
 
-    // Get user's email settings
-    const { data: userSettings, error: settingsError } = await supabaseAdmin
-      .from("user_settings")
-      .select(
-        "sender_email, encrypted_app_password, email_configured, send_delay_min, send_delay_max"
-      )
-      .eq("user_id", user.id)
-      .single();
+    // Fetch user email settings
+    const userSettings = await prisma.userSettings.findUnique({
+      where: { userId: user.id },
+    });
 
-    if (settingsError || !userSettings?.email_configured) {
+    if (!userSettings?.emailConfigured || !userSettings?.senderEmail) {
       return NextResponse.json(
         {
           success: false,
-          error:
-            "Email not configured. Please configure your email settings first.",
+          error: "Email not configured. Please set up your email in Settings.",
         },
         { status: 400 }
       );
     }
 
-    // Create campaign in database
-    const { data: campaign, error: campaignError } = await supabaseAdmin
-      .from("email_campaigns")
-      .insert({
-        user_id: user.id,
-        name: `Campaign - ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`,
-        template_id: templateId,
-        resume_id: resumeId || null,
+    // Create campaign
+    const campaign = await prisma.emailCampaign.create({
+      data: {
+        userId: user.id,
+        name: campaignName || `Campaign ${new Date().toLocaleDateString()}`,
+        templateId,
+        resumeId: resumeId || null,
         status: "sending",
-        total_recipients: recipients.length,
-        sent_count: 0,
-        failed_count: 0,
-        started_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
+        totalRecipients: recipients.length,
+        startedAt: new Date(),
+      },
+    });
 
-    if (campaignError) {
-      console.error("Campaign creation error:", campaignError);
-      return NextResponse.json(
-        { success: false, error: "Failed to create campaign" },
-        { status: 500 }
-      );
-    }
+    // Save recipients
+    await prisma.campaignRecipient.createMany({
+      data: recipients.map((r) => ({
+        campaignId: campaign.id,
+        name: r.name || "Unknown",
+        email: r.email,
+        company: r.company || null,
+        position: r.position || null,
+        status: "pending",
+      })),
+    });
 
-    // Add recipients to database
-    const recipientData = recipients.map((recipient) => ({
-      campaign_id: campaign.id,
-      name: recipient.name || "Unknown",
-      email: recipient.email,
-      company: recipient.company || null,
-      position: recipient.position || null,
-      status: "pending",
-    }));
-
-    const { error: recipientsError } = await supabaseAdmin
-      .from("campaign_recipients")
-      .insert(recipientData);
-
-    if (recipientsError) {
-      console.error("Recipients creation error:", recipientsError);
-      // Try to cleanup the campaign
-      await supabaseAdmin
-        .from("email_campaigns")
-        .delete()
-        .eq("id", campaign.id);
-      return NextResponse.json(
-        { success: false, error: "Failed to save recipients" },
-        { status: 500 }
-      );
-    }
-
-    console.log(`✅ Campaign created: ${campaign.id}`);
-
-    // Start background email processing (don't await - let it run in background)
+    // Process emails in background (fire and forget)
     processEmailsInBackground(
       campaign.id,
+      user,
       template,
       resume,
-      userSettings,
-      user,
-      supabaseAdmin
+      userSettings
     );
 
     return NextResponse.json({
       success: true,
       campaignId: campaign.id,
-      message: "Campaign started successfully",
+      message: `Campaign started with ${recipients.length} recipients`,
     });
   } catch (error) {
     console.error("Start campaign error:", error);
@@ -200,75 +110,52 @@ export async function POST(request) {
   }
 }
 
-// Background email processing function
 async function processEmailsInBackground(
   campaignId,
+  user,
   template,
   resume,
-  userSettings,
-  user,
-  supabaseAdmin
+  userSettings
 ) {
   try {
-    console.log(
-      `📧 Starting background processing for campaign: ${campaignId}`
-    );
-
-    // Decrypt password
     let appPassword;
     try {
-      appPassword = decryptPassword(userSettings.encrypted_app_password);
-    } catch (error) {
-      console.error("Password decryption error:", error);
-      await supabaseAdmin
-        .from("email_campaigns")
-        .update({ status: "failed" })
-        .eq("id", campaignId);
+      appPassword = decryptPassword(userSettings.encryptedAppPassword);
+    } catch (err) {
+      console.error("Failed to decrypt password:", err);
+      await prisma.emailCampaign.update({
+        where: { id: campaignId },
+        data: { status: "failed" },
+      });
       return;
     }
 
-    // Get pending recipients
-    const { data: pendingRecipients, error: recipientsError } =
-      await supabaseAdmin
-        .from("campaign_recipients")
-        .select("*")
-        .eq("campaign_id", campaignId)
-        .eq("status", "pending")
-        .order("created_at", { ascending: true });
+    const pendingRecipients = await prisma.campaignRecipient.findMany({
+      where: { campaignId, status: "pending" },
+    });
 
-    if (recipientsError) {
-      console.error("Error fetching recipients:", recipientsError);
-      return;
-    }
+    for (const recipient of pendingRecipients) {
+      // Check if campaign was stopped
+      const campaign = await prisma.emailCampaign.findUnique({
+        where: { id: campaignId },
+        select: { status: true },
+      });
 
-    console.log(`📋 Processing ${pendingRecipients.length} recipients`);
-
-    let sentCount = 0;
-    let failedCount = 0;
-
-    for (let i = 0; i < pendingRecipients.length; i++) {
-      const recipient = pendingRecipients[i];
+      if (
+        campaign?.status === "stopped" ||
+        campaign?.status === "cancelled"
+      ) {
+        console.log(`Campaign ${campaignId} was stopped`);
+        return;
+      }
 
       try {
-        // Check if campaign was stopped
-        const { data: currentCampaign } = await supabaseAdmin
-          .from("email_campaigns")
-          .select("status")
-          .eq("id", campaignId)
-          .single();
+        // Update to sending
+        await prisma.campaignRecipient.update({
+          where: { id: recipient.id },
+          data: { status: "sending" },
+        });
 
-        if (currentCampaign?.status !== "sending") {
-          console.log(`Campaign ${campaignId} was stopped`);
-          break;
-        }
-
-        // Update recipient status to 'sending'
-        await supabaseAdmin
-          .from("campaign_recipients")
-          .update({ status: "sending" })
-          .eq("id", recipient.id);
-
-        // Prepare email content
         const trackingId = generateTrackingId();
         const variables = {
           recruiterName: recipient.name,
@@ -276,125 +163,128 @@ async function processEmailsInBackground(
           email: recipient.email,
           company: recipient.company || "",
           position: recipient.position || "",
-          myName: user.user_metadata?.name || user.email,
-          myEmail: user.email,
+          myName: user.name || user.email,
+          myEmail: userSettings.senderEmail,
         };
 
         const subject = replaceVariables(template.subject, variables);
         const body = replaceVariables(template.body, variables);
 
-        // Send email
         const emailResult = await sendEmail({
           to: recipient.email,
           subject,
           body,
           attachments: resume
-            ? [
-                {
-                  filename: resume.file_name,
-                  path: resume.file_url,
-                },
-              ]
+            ? [{ filename: resume.fileName, path: resume.fileUrl }]
             : [],
           trackingId,
-          senderEmail: userSettings.sender_email,
+          senderEmail: userSettings.senderEmail,
           appPassword,
         });
 
         if (emailResult.success) {
-          // Mark as sent
-          await supabaseAdmin
-            .from("campaign_recipients")
-            .update({
+          await prisma.campaignRecipient.update({
+            where: { id: recipient.id },
+            data: {
               status: "sent",
-              sent_at: new Date().toISOString(),
-              tracking_id: trackingId,
-            })
-            .eq("id", recipient.id);
+              sentAt: new Date(),
+              trackingId,
+            },
+          });
 
-          sentCount++;
-          console.log(
-            `✅ Sent to ${recipient.email} (${sentCount}/${pendingRecipients.length})`
-          );
+          await prisma.emailCampaign.update({
+            where: { id: campaignId },
+            data: { sentCount: { increment: 1 } },
+          });
+
+          // Save to outreach history
+          const contact = await prisma.contact.upsert({
+            where: {
+              userId_email: {
+                userId: user.id,
+                email: recipient.email,
+              },
+            },
+            update: {
+              name: recipient.name,
+              company: recipient.company,
+              position: recipient.position,
+            },
+            create: {
+              userId: user.id,
+              name: recipient.name,
+              email: recipient.email,
+              company: recipient.company,
+              position: recipient.position,
+            },
+          });
+
+          await prisma.outreachHistory.create({
+            data: {
+              userId: user.id,
+              contactId: contact.id,
+              templateId: template.id,
+              resumeId: resume?.id || null,
+              type: "email",
+              subject,
+              content: body,
+              status: "sent",
+              trackingId,
+            },
+          });
         } else {
-          // Mark as failed
-          await supabaseAdmin
-            .from("campaign_recipients")
-            .update({
+          await prisma.campaignRecipient.update({
+            where: { id: recipient.id },
+            data: {
               status: "failed",
-              error_message: emailResult.error,
-            })
-            .eq("id", recipient.id);
+              errorMessage: emailResult.error,
+            },
+          });
 
-          failedCount++;
-          console.log(
-            `❌ Failed to send to ${recipient.email}: ${emailResult.error}`
-          );
+          await prisma.emailCampaign.update({
+            where: { id: campaignId },
+            data: { failedCount: { increment: 1 } },
+          });
         }
-
-        // Update campaign counts
-        await supabaseAdmin
-          .from("email_campaigns")
-          .update({
-            sent_count: sentCount,
-            failed_count: failedCount,
-          })
-          .eq("id", campaignId);
-
-        // Add delay between emails (except for last one)
-        if (i < pendingRecipients.length - 1) {
-          const minDelay = (userSettings.send_delay_min || 8) * 1000;
-          const maxDelay = (userSettings.send_delay_max || 20) * 1000;
-          const randomDelay =
-            Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
-
-          console.log(`⏱️ Waiting ${randomDelay / 1000}s before next email...`);
-          await new Promise((resolve) => setTimeout(resolve, randomDelay));
-        }
-      } catch (error) {
-        console.error(`Error processing recipient ${recipient.email}:`, error);
-
-        // Mark as failed
-        await supabaseAdmin
-          .from("campaign_recipients")
-          .update({
+      } catch (err) {
+        console.error(`Error sending to ${recipient.email}:`, err);
+        await prisma.campaignRecipient.update({
+          where: { id: recipient.id },
+          data: {
             status: "failed",
-            error_message: error.message,
-          })
-          .eq("id", recipient.id);
-
-        failedCount++;
-
-        // Update campaign counts
-        await supabaseAdmin
-          .from("email_campaigns")
-          .update({
-            sent_count: sentCount,
-            failed_count: failedCount,
-          })
-          .eq("id", campaignId);
+            errorMessage: err.message,
+          },
+        });
+        await prisma.emailCampaign.update({
+          where: { id: campaignId },
+          data: { failedCount: { increment: 1 } },
+        });
       }
+
+      // Random delay between emails
+      const minDelay = (userSettings.sendDelayMin || 8) * 1000;
+      const maxDelay = (userSettings.sendDelayMax || 20) * 1000;
+      const randomDelay =
+        Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+      await new Promise((resolve) => setTimeout(resolve, randomDelay));
     }
 
     // Mark campaign as completed
-    await supabaseAdmin
-      .from("email_campaigns")
-      .update({
+    await prisma.emailCampaign.update({
+      where: { id: campaignId },
+      data: {
         status: "completed",
-        completed_at: new Date().toISOString(),
-        sent_count: sentCount,
-        failed_count: failedCount,
-      })
-      .eq("id", campaignId);
+        completedAt: new Date(),
+        lastProcessedAt: new Date(),
+      },
+    });
 
-    console.log(
-      `🎉 Campaign ${campaignId} completed: ${sentCount} sent, ${failedCount} failed`
-    );
+    console.log(`Campaign ${campaignId} completed`);
   } catch (error) {
-    console.error(`Campaign ${campaignId} error:`, error);
-    await supabaseAdmin
-      .from("email_campaigns")
-      .update({ status: "failed" })
-      .eq("id", campaignId);
+    console.error(`Background processing error for ${campaignId}:`, error);
+    await prisma.emailCampaign.update({
+      where: { id: campaignId },
+      data: { status: "failed" },
+    });
   }
 }

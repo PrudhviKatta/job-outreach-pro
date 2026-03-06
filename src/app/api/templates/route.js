@@ -1,59 +1,27 @@
 // src/app/api/templates/route.js
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
-import { supabase as clientSupabase } from "@/lib/supabase";
+import { requireAuth } from "@/lib/middleware";
+import { prisma } from "@/lib/db";
 
 export async function GET(request) {
   try {
-    const authHeader = request.headers.get("authorization");
-    const token = authHeader?.replace("Bearer ", "");
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
-
-    // Verify the token and get user
-    const {
-      data: { user },
-      error: authError,
-    } = await clientSupabase.auth.getUser(token);
-
-    if (authError || !user) {
-      return NextResponse.json(
-        { success: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
+    const { user, error } = await requireAuth();
+    if (error) return error;
 
     const { searchParams } = new URL(request.url);
     const type = searchParams.get("type") || "email";
     const includeArchived = searchParams.get("includeArchived") === "true";
 
-    // Create an admin client to bypass RLS
-    const supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_KEY
-    );
+    const where = {
+      userId: user.id,
+      type,
+      ...(includeArchived ? {} : { deletedAt: null }),
+    };
 
-    let query = supabaseAdmin
-      .from("templates")
-      .select("*")
-      .eq("type", type)
-      .eq("user_id", user.id);
-
-    // Filter out deleted templates unless specifically requested
-    if (!includeArchived) {
-      query = query.is("deleted_at", null);
-    }
-
-    const { data, error } = await query.order("created_at", {
-      ascending: false,
+    const data = await prisma.template.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
     });
-
-    if (error) throw error;
 
     return NextResponse.json({ success: true, data });
   } catch (error) {
@@ -66,31 +34,11 @@ export async function GET(request) {
 
 export async function POST(request) {
   try {
-    const authHeader = request.headers.get("authorization");
-    const token = authHeader?.replace("Bearer ", "");
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
-
-    const {
-      data: { user },
-      error: authError,
-    } = await clientSupabase.auth.getUser(token);
-
-    if (authError || !user) {
-      return NextResponse.json(
-        { success: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
+    const { user, error } = await requireAuth();
+    if (error) return error;
 
     const body = await request.json();
 
-    // Validate required fields
     if (!body.name || !body.body || !body.type) {
       return NextResponse.json(
         { success: false, error: "Missing required fields: name, body, type" },
@@ -98,7 +46,6 @@ export async function POST(request) {
       );
     }
 
-    // Validate email template has subject
     if (body.type === "email" && !body.subject) {
       return NextResponse.json(
         { success: false, error: "Email templates require a subject" },
@@ -106,23 +53,16 @@ export async function POST(request) {
       );
     }
 
-    const supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_KEY
-    );
-
-    const { data, error } = await supabaseAdmin
-      .from("templates")
-      .insert({
-        ...body,
-        user_id: user.id,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
+    const data = await prisma.template.create({
+      data: {
+        userId: user.id,
+        name: body.name,
+        subject: body.subject || null,
+        body: body.body,
+        type: body.type,
+        category: body.category || null,
+      },
+    });
 
     return NextResponse.json({ success: true, data });
   } catch (error) {
@@ -135,27 +75,8 @@ export async function POST(request) {
 
 export async function PUT(request) {
   try {
-    const authHeader = request.headers.get("authorization");
-    const token = authHeader?.replace("Bearer ", "");
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
-
-    const {
-      data: { user },
-      error: authError,
-    } = await clientSupabase.auth.getUser(token);
-
-    if (authError || !user) {
-      return NextResponse.json(
-        { success: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
+    const { user, error } = await requireAuth();
+    if (error) return error;
 
     const body = await request.json();
     const { id, ...updateData } = body;
@@ -167,32 +88,25 @@ export async function PUT(request) {
       );
     }
 
-    const supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_KEY
-    );
+    const data = await prisma.template.updateMany({
+      where: { id, userId: user.id },
+      data: {
+        ...(updateData.name !== undefined && { name: updateData.name }),
+        ...(updateData.subject !== undefined && { subject: updateData.subject }),
+        ...(updateData.body !== undefined && { body: updateData.body }),
+        ...(updateData.category !== undefined && { category: updateData.category }),
+      },
+    });
 
-    const { data, error } = await supabaseAdmin
-      .from("templates")
-      .update({
-        ...updateData,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", id)
-      .eq("user_id", user.id) // Ensure user can only update their own templates
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    if (!data) {
+    if (data.count === 0) {
       return NextResponse.json(
         { success: false, error: "Template not found or access denied" },
         { status: 404 }
       );
     }
 
-    return NextResponse.json({ success: true, data });
+    const updated = await prisma.template.findUnique({ where: { id } });
+    return NextResponse.json({ success: true, data: updated });
   } catch (error) {
     return NextResponse.json(
       { success: false, error: error.message },
@@ -203,27 +117,8 @@ export async function PUT(request) {
 
 export async function DELETE(request) {
   try {
-    const authHeader = request.headers.get("authorization");
-    const token = authHeader?.replace("Bearer ", "");
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
-
-    const {
-      data: { user },
-      error: authError,
-    } = await clientSupabase.auth.getUser(token);
-
-    if (authError || !user) {
-      return NextResponse.json(
-        { success: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
+    const { user, error } = await requireAuth();
+    if (error) return error;
 
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
@@ -236,37 +131,25 @@ export async function DELETE(request) {
       );
     }
 
-    const supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_KEY
-    );
-
     if (hardDelete) {
-      // Hard delete - only allowed if no outreach history exists
-      const { data: outreachExists } = await supabaseAdmin
-        .from("outreach_history")
-        .select("id")
-        .eq("template_id", id)
-        .limit(1);
+      const outreachExists = await prisma.outreachHistory.findFirst({
+        where: { templateId: id },
+        select: { id: true },
+      });
 
-      if (outreachExists && outreachExists.length > 0) {
+      if (outreachExists) {
         return NextResponse.json(
           {
             success: false,
-            error:
-              "Cannot permanently delete template with existing outreach history. Use archive instead.",
+            error: "Cannot permanently delete template with existing outreach history. Use archive instead.",
           },
           { status: 400 }
         );
       }
 
-      const { error } = await supabaseAdmin
-        .from("templates")
-        .delete()
-        .eq("id", id)
-        .eq("user_id", user.id);
-
-      if (error) throw error;
+      await prisma.template.deleteMany({
+        where: { id, userId: user.id },
+      });
 
       return NextResponse.json({
         success: true,
@@ -274,26 +157,19 @@ export async function DELETE(request) {
       });
     } else {
       // Soft delete (archive)
-      const { data, error } = await supabaseAdmin
-        .from("templates")
-        .update({
-          deleted_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", id)
-        .eq("user_id", user.id)
-        .select()
-        .single();
+      const result = await prisma.template.updateMany({
+        where: { id, userId: user.id },
+        data: { deletedAt: new Date() },
+      });
 
-      if (error) throw error;
-
-      if (!data) {
+      if (result.count === 0) {
         return NextResponse.json(
           { success: false, error: "Template not found or access denied" },
           { status: 404 }
         );
       }
 
+      const data = await prisma.template.findUnique({ where: { id } });
       return NextResponse.json({
         success: true,
         message: "Template archived successfully",
@@ -311,27 +187,8 @@ export async function DELETE(request) {
 // PATCH method for restoring archived templates
 export async function PATCH(request) {
   try {
-    const authHeader = request.headers.get("authorization");
-    const token = authHeader?.replace("Bearer ", "");
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
-
-    const {
-      data: { user },
-      error: authError,
-    } = await clientSupabase.auth.getUser(token);
-
-    if (authError || !user) {
-      return NextResponse.json(
-        { success: false, error: "Not authenticated" },
-        { status: 401 }
-      );
-    }
+    const { user, error } = await requireAuth();
+    if (error) return error;
 
     const { id, action } = await request.json();
 
@@ -342,32 +199,20 @@ export async function PATCH(request) {
       );
     }
 
-    const supabaseAdmin = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_KEY
-    );
-
     if (action === "restore") {
-      const { data, error } = await supabaseAdmin
-        .from("templates")
-        .update({
-          deleted_at: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", id)
-        .eq("user_id", user.id)
-        .select()
-        .single();
+      const result = await prisma.template.updateMany({
+        where: { id, userId: user.id },
+        data: { deletedAt: null },
+      });
 
-      if (error) throw error;
-
-      if (!data) {
+      if (result.count === 0) {
         return NextResponse.json(
           { success: false, error: "Template not found or access denied" },
           { status: 404 }
         );
       }
 
+      const data = await prisma.template.findUnique({ where: { id } });
       return NextResponse.json({
         success: true,
         message: "Template restored successfully",

@@ -1,29 +1,32 @@
 import { Inter } from "next/font/google";
 import "./globals.css";
+import Providers from "@/components/Providers";
 import Header from "@/components/Layout/Header";
 import MobileNav from "@/components/Layout/MobileNav";
-import { Toaster } from "react-hot-toast";
 import AuthCheck from "@/components/AuthCheck";
+import { Toaster } from "react-hot-toast";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata = {
   title: "Job Outreach Pro",
-  description: "Automate your job search outreach",
+  description: "Automated job search outreach platform",
 };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className={inter.className}>
-        <AuthCheck>
-          <div className="min-h-screen bg-gray-50">
+      <body className={`${inter.className} bg-gray-50 min-h-screen`}>
+        <Providers>
+          <AuthCheck>
             <Header />
-            <main className="pb-20 lg:pb-0">{children}</main>
+            <main className="container mx-auto px-4 py-8 pb-20 lg:pb-8">
+              {children}
+            </main>
             <MobileNav />
-          </div>
-        </AuthCheck>
-        <Toaster position="top-right" />
+          </AuthCheck>
+          <Toaster position="top-right" />
+        </Providers>
       </body>
     </html>
   );

@@ -1,83 +1,46 @@
 "use client";
 import { useState, useEffect } from "react";
+import { useSession } from "next-auth/react";
 import Stats from "@/components/Dashboard/Stats";
 import FollowUpList from "@/components/Dashboard/FollowUpList";
-import { supabase } from "@/lib/supabase";
-import toast from "react-hot-toast";
 
-export default function Dashboard() {
-  const [stats, setStats] = useState({
-    sentToday: 0,
-    opened: 0,
-    replied: 0,
-  });
+export default function DashboardPage() {
+  const { data: session } = useSession();
+  const [stats, setStats] = useState({ sentToday: 0, opened: 0, replied: 0 });
   const [followUps, setFollowUps] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchDashboardData();
-  }, []);
+    if (session) {
+      fetchDashboard();
+    }
+  }, [session]);
 
-  const fetchDashboardData = async () => {
+  const fetchDashboard = async () => {
     try {
-      // Get today's stats
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      const { data: todayData, error: todayError } = await supabase
-        .from("outreach_history")
-        .select("*")
-        .gte("sent_at", today.toISOString());
-
-      if (todayError) throw todayError;
-
-      const opened = todayData.filter(
-        (item) => item.status === "opened"
-      ).length;
-      const replied = todayData.filter(
-        (item) => item.status === "replied"
-      ).length;
-
-      setStats({
-        sentToday: todayData.length,
-        opened,
-        replied,
-      });
-
-      // Get follow-ups needed
-      const threeDaysAgo = new Date();
-      threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
-
-      const { data: followUpData, error: followUpError } = await supabase
-        .from("outreach_history")
-        .select("*, contacts(*)")
-        .lte("sent_at", threeDaysAgo.toISOString())
-        .neq("status", "replied")
-        .order("sent_at", { ascending: true })
-        .limit(10);
-
-      if (followUpError) throw followUpError;
-
-      setFollowUps(followUpData || []);
+      const res = await fetch("/api/dashboard");
+      const data = await res.json();
+      if (data.success) {
+        setStats(data.stats);
+        setFollowUps(data.followUps);
+      }
     } catch (error) {
-      toast.error("Error loading dashboard data");
-      console.error(error);
+      console.error("Error fetching dashboard:", error);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <h1 className="text-3xl font-bold text-gray-900 mb-8">Dashboard</h1>
-
+    <div className="space-y-8">
+      <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
       <Stats stats={stats} loading={loading} />
 
-      <div className="mt-8">
+      <div>
         <h2 className="text-xl font-semibold text-gray-900 mb-4">
-          Need Follow-up ({followUps.length})
+          Follow-up Needed
         </h2>
-        <FollowUpList followUps={followUps} onFollowUp={fetchDashboardData} />
+        <FollowUpList followUps={followUps} />
       </div>
     </div>
   );

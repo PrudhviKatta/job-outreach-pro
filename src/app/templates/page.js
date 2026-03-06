@@ -1,26 +1,16 @@
 "use client";
-import { useState, useEffect, useMemo } from "react";
-import { supabase } from "@/lib/supabase";
-import { Plus, Edit2, Trash2 } from "lucide-react";
-import Button from "@/components/UI/Button";
-import toast from "react-hot-toast";
+import { useState, useEffect } from "react";
+import { useSession } from "next-auth/react";
 import dynamic from "next/dynamic";
+import toast from "react-hot-toast";
+import { Trash2, Edit, Plus, X } from "lucide-react";
 
-// Dynamically import MDEditor to avoid SSR issues
-const MDEditor = dynamic(
-  () => import("@uiw/react-md-editor").then((mod) => mod.default),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="h-48 bg-gray-100 rounded animate-pulse flex items-center justify-center">
-        Loading editor...
-      </div>
-    ),
-  }
-);
+const MDEditor = dynamic(() => import("@uiw/react-md-editor"), { ssr: false });
 
 export default function TemplatesPage() {
+  const { data: session } = useSession();
   const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [formData, setFormData] = useState({
@@ -32,89 +22,65 @@ export default function TemplatesPage() {
   });
 
   useEffect(() => {
-    fetchTemplates();
-  }, []);
+    if (session) fetchTemplates();
+  }, [session]);
 
   const fetchTemplates = async () => {
-    const { data, error } = await supabase
-      .from("templates")
-      .select("*")
-      .is("deleted_at", null) // Only fetch non-deleted templates
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      toast.error("Error loading templates");
-    } else {
-      setTemplates(data || []);
+    try {
+      const res = await fetch("/api/templates?type=email");
+      const data = await res.json();
+      if (data.success) {
+        setTemplates(data.data);
+      }
+    } catch (error) {
+      console.error("Error fetching templates:", error);
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-
     try {
-      if (editingTemplate) {
-        const { error } = await supabase
-          .from("templates")
-          .update(formData)
-          .eq("id", editingTemplate.id);
+      const method = editingTemplate ? "PUT" : "POST";
+      const body = editingTemplate
+        ? { id: editingTemplate.id, ...formData }
+        : formData;
 
-        if (error) throw error;
-        toast.success("Template updated!");
-      } else {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-
-        const response = await fetch("/api/templates", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session?.access_token}`,
-          },
-          body: JSON.stringify(formData),
-        });
-
-        if (!response.ok) throw new Error("Failed to create template");
-        toast.success("Template created!");
-      }
-
-      setShowForm(false);
-      setEditingTemplate(null);
-      setFormData({
-        name: "",
-        subject: "",
-        body: "",
-        type: "email",
-        category: "company",
+      const res = await fetch("/api/templates", {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
       });
-      fetchTemplates();
+
+      const data = await res.json();
+      if (data.success) {
+        toast.success(
+          editingTemplate ? "Template updated!" : "Template created!"
+        );
+        fetchTemplates();
+        resetForm();
+      } else {
+        toast.error(data.error);
+      }
     } catch (error) {
       toast.error("Error saving template");
     }
   };
 
   const handleDelete = async (id) => {
-    if (
-      !confirm(
-        "Are you sure you want to archive this template? It will be hidden but your email history will be preserved."
-      )
-    )
-      return;
-
+    if (!confirm("Archive this template?")) return;
     try {
-      // Soft delete - set deleted_at timestamp
-      const { error } = await supabase
-        .from("templates")
-        .update({ deleted_at: new Date().toISOString() })
-        .eq("id", id);
-
-      if (error) throw error;
-      toast.success("Template archived!");
-      fetchTemplates();
+      const res = await fetch(`/api/templates?id=${id}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Template archived");
+        fetchTemplates();
+      }
     } catch (error) {
       toast.error("Error archiving template");
-      console.error("Archive error:", error);
     }
   };
 
@@ -122,197 +88,216 @@ export default function TemplatesPage() {
     setEditingTemplate(template);
     setFormData({
       name: template.name,
-      subject: template.subject,
+      subject: template.subject || "",
       body: template.body,
       type: template.type,
-      category: template.category,
+      category: template.category || "company",
     });
     setShowForm(true);
   };
 
+  const resetForm = () => {
+    setShowForm(false);
+    setEditingTemplate(null);
+    setFormData({
+      name: "",
+      subject: "",
+      body: "",
+      type: "email",
+      category: "company",
+    });
+  };
+
+  const variablesList = [
+    "{{recruiterName}}",
+    "{{company}}",
+    "{{position}}",
+    "{{myName}}",
+    "{{myEmail}}",
+  ];
+
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="flex justify-between items-center mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Templates</h1>
-        <Button onClick={() => setShowForm(true)} className="flex items-center">
-          <Plus className="w-4 h-4 mr-2" />
-          New Template
-        </Button>
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h1 className="text-3xl font-bold text-gray-900">Email Templates</h1>
+        {!showForm && (
+          <button
+            onClick={() => setShowForm(true)}
+            className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors flex items-center"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            New Template
+          </button>
+        )}
       </div>
 
       {showForm && (
-        <div className="bg-white p-6 rounded-lg shadow-md mb-8">
-          <h2 className="text-xl font-semibold mb-4">
-            {editingTemplate ? "Edit Template" : "Create Template"}
-          </h2>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Template Name
-                </label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) =>
-                    setFormData({ ...formData, name: e.target.value })
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                  required
-                />
-              </div>
+        <form
+          onSubmit={handleSubmit}
+          className="bg-white rounded-lg shadow-md p-6 space-y-4"
+        >
+          <div className="flex justify-between items-center">
+            <h2 className="text-xl font-semibold">
+              {editingTemplate ? "Edit Template" : "New Template"}
+            </h2>
+            <button type="button" onClick={resetForm}>
+              <X className="w-5 h-5 text-gray-500 hover:text-gray-700" />
+            </button>
+          </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Type
-                </label>
-                <select
-                  value={formData.type}
-                  onChange={(e) =>
-                    setFormData({ ...formData, type: e.target.value })
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                >
-                  <option value="email">Email</option>
-                </select>
-              </div>
-            </div>
-
-            {formData.type === "email" && (
-              <>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Category
-                  </label>
-                  <select
-                    value={formData.category}
-                    onChange={(e) =>
-                      setFormData({ ...formData, category: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="company">Company Direct</option>
-                    <option value="vendor">Vendor/Recruiter</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Subject Line
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.subject}
-                    onChange={(e) =>
-                      setFormData({ ...formData, subject: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
-                    placeholder="Use {{variables}} for personalization"
-                    required={formData.type === "email"}
-                  />
-                </div>
-              </>
-            )}
-
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Message Body
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Template Name *
               </label>
-              <div className="border border-gray-300 rounded-lg overflow-hidden">
-                <MDEditor
-                  value={formData.body}
-                  onChange={(value) =>
-                    setFormData({ ...formData, body: value || "" })
-                  }
-                  preview="edit"
-                  hideToolbar={false}
-                  height={300}
-                  data-color-mode="light"
-                />
-              </div>
-              <p className="text-sm text-gray-500 mt-1">
-                Available variables:{" "}
-                {
-                  "{{recruiterName}}, {{company}}, {{position}}, {{myName}}, {{myEmail}}"
+              <input
+                type="text"
+                value={formData.name}
+                onChange={(e) =>
+                  setFormData({ ...formData, name: e.target.value })
                 }
-              </p>
-              <p className="text-xs text-gray-400 mt-1">
-                Use markdown: **bold**, *italic*, - bullet points, [link](url)
-              </p>
+                required
+                className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                placeholder="Cold Outreach v1"
+              />
             </div>
-
-            <div className="flex space-x-3">
-              <Button type="submit">
-                {editingTemplate ? "Update Template" : "Create Template"}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setShowForm(false);
-                  setEditingTemplate(null);
-                  setFormData({
-                    name: "",
-                    subject: "",
-                    body: "",
-                    type: "email",
-                    category: "company",
-                  });
-                }}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Category
+              </label>
+              <select
+                value={formData.category}
+                onChange={(e) =>
+                  setFormData({ ...formData, category: e.target.value })
+                }
+                className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
-                Cancel
-              </Button>
+                <option value="company">Company</option>
+                <option value="vendor">Vendor</option>
+              </select>
             </div>
-          </form>
-        </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Subject Line *
+            </label>
+            <input
+              type="text"
+              value={formData.subject}
+              onChange={(e) =>
+                setFormData({ ...formData, subject: e.target.value })
+              }
+              required
+              className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="Interested in {{position}} role at {{company}}"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Email Body *
+            </label>
+            <MDEditor
+              value={formData.body}
+              onChange={(val) => setFormData({ ...formData, body: val || "" })}
+              height={300}
+            />
+          </div>
+
+          <div className="bg-gray-50 p-3 rounded-lg">
+            <p className="text-sm font-medium text-gray-700 mb-2">
+              Available Variables:
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {variablesList.map((v) => (
+                <code
+                  key={v}
+                  className="bg-indigo-100 text-indigo-700 px-2 py-1 rounded text-xs cursor-pointer hover:bg-indigo-200"
+                  onClick={() =>
+                    setFormData({
+                      ...formData,
+                      body: formData.body + ` ${v}`,
+                    })
+                  }
+                >
+                  {v}
+                </code>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex space-x-3">
+            <button
+              type="submit"
+              className="flex-1 bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition-colors font-medium"
+            >
+              {editingTemplate ? "Update Template" : "Create Template"}
+            </button>
+            <button
+              type="button"
+              onClick={resetForm}
+              className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {templates.map((template) => (
-          <div key={template.id} className="bg-white p-6 rounded-lg shadow-md">
-            <div className="flex justify-between items-start mb-4">
-              <div>
-                <h3 className="text-lg font-semibold">{template.name}</h3>
-                <div className="flex space-x-2 mt-1">
-                  <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs">
-                    {template.type.replace("_", " ")}
-                  </span>
+      {loading ? (
+        <div className="text-center py-8 text-gray-500">
+          Loading templates...
+        </div>
+      ) : templates.length === 0 ? (
+        <div className="bg-white rounded-lg shadow-md p-8 text-center">
+          <p className="text-gray-500">
+            No templates yet. Create your first one!
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          {templates.map((template) => (
+            <div
+              key={template.id}
+              className="bg-white rounded-lg shadow-md p-6"
+            >
+              <div className="flex justify-between items-start">
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    {template.name}
+                  </h3>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Subject: {template.subject}
+                  </p>
+                  <p className="text-sm text-gray-500 mt-2 line-clamp-3">
+                    {template.body}
+                  </p>
                   {template.category && (
-                    <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
+                    <span className="inline-block mt-2 text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
                       {template.category}
                     </span>
                   )}
                 </div>
-              </div>
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => handleEdit(template)}
-                  className="text-gray-600 hover:text-gray-900"
-                >
-                  <Edit2 className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => handleDelete(template.id)}
-                  className="text-red-600 hover:text-red-700"
-                  title="Archive template"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                <div className="flex space-x-2 ml-4">
+                  <button
+                    onClick={() => handleEdit(template)}
+                    className="text-indigo-600 hover:text-indigo-700 p-1"
+                  >
+                    <Edit className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(template.id)}
+                    className="text-red-600 hover:text-red-700 p-1"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             </div>
-
-            {template.subject && (
-              <p className="text-sm text-gray-600 mb-2">
-                <strong>Subject:</strong> {template.subject}
-              </p>
-            )}
-
-            <div className="text-sm text-gray-700 line-clamp-3">
-              <div dangerouslySetInnerHTML={{ __html: template.body }} />
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

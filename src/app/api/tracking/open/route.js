@@ -1,5 +1,6 @@
+// src/app/api/tracking/open/route.js
 import { NextResponse } from "next/server";
-import { supabase } from "@/lib/supabase";
+import { prisma } from "@/lib/db";
 
 export async function GET(request) {
   try {
@@ -7,14 +8,13 @@ export async function GET(request) {
     const trackingId = searchParams.get("id");
 
     if (trackingId) {
-      // Update the outreach record
-      await supabase
-        .from("outreach_history")
-        .update({
+      await prisma.outreachHistory.updateMany({
+        where: { trackingId },
+        data: {
           status: "opened",
-          opened_at: new Date().toISOString(),
-        })
-        .eq("tracking_id", trackingId);
+          openedAt: new Date(),
+        },
+      });
     }
 
     // Return 1x1 transparent pixel

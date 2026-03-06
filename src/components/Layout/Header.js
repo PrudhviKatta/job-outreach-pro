@@ -3,8 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, X } from "lucide-react";
 import { useState } from "react";
-import { supabase } from "@/lib/supabase";
-import { useRouter } from "next/navigation";
+import { signOut } from "next-auth/react";
 
 export default function Header() {
   const pathname = usePathname();
@@ -17,11 +16,8 @@ export default function Header() {
     { name: "Settings", href: "/settings" },
   ];
 
-  const router = useRouter();
-
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push("/auth/login");
+    await signOut({ callbackUrl: "/auth/login" });
   };
 
   return (
@@ -37,11 +33,10 @@ export default function Header() {
               <Link
                 key={item.name}
                 href={item.href}
-                className={`text-sm font-medium ${
-                  pathname === item.href
+                className={`text-sm font-medium ${pathname === item.href
                     ? "text-indigo-600"
                     : "text-gray-700 hover:text-indigo-600"
-                }`}
+                  }`}
               >
                 {item.name}
               </Link>
@@ -72,9 +67,8 @@ export default function Header() {
               <Link
                 key={item.name}
                 href={item.href}
-                className={`block py-2 text-sm font-medium ${
-                  pathname === item.href ? "text-indigo-600" : "text-gray-700"
-                }`}
+                className={`block py-2 text-sm font-medium ${pathname === item.href ? "text-indigo-600" : "text-gray-700"
+                  }`}
                 onClick={() => setMobileMenuOpen(false)}
               >
                 {item.name}
