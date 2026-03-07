@@ -116,7 +116,7 @@ export default function CleanEmailForm({
           <option value="">No resume attachment</option>
           {resumes.map((resume) => (
             <option key={resume.id} value={resume.id}>
-              {resume.display_name}
+              {resume.displayName || resume.fileName}
             </option>
           ))}
         </select>
@@ -153,22 +153,20 @@ export default function CleanEmailForm({
             <div className="flex border-b border-gray-200 mb-6">
               <button
                 onClick={() => setActiveTab("manual")}
-                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                  activeTab === "manual"
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === "manual"
                     ? "text-blue-600 border-blue-600"
                     : "text-gray-500 border-transparent hover:text-gray-700"
-                }`}
+                  }`}
               >
                 <Users className="w-4 h-4 inline mr-2" />
                 Manual Entry
               </button>
               <button
                 onClick={() => setActiveTab("bulk")}
-                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ml-4 ${
-                  activeTab === "bulk"
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ml-4 ${activeTab === "bulk"
                     ? "text-blue-600 border-blue-600"
                     : "text-gray-500 border-transparent hover:text-gray-700"
-                }`}
+                  }`}
               >
                 <Upload className="w-4 h-4 inline mr-2" />
                 Bulk Upload

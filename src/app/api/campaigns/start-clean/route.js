@@ -175,7 +175,7 @@ async function processEmailsInBackground(
           subject,
           body,
           attachments: resume
-            ? [{ filename: resume.fileName, path: resume.fileUrl }]
+            ? [{ filename: resume.fileName, path: require("path").join(process.cwd(), resume.fileUrl) }]
             : [],
           trackingId,
           senderEmail: userSettings.senderEmail,

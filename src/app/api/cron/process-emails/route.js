@@ -111,7 +111,7 @@ export async function GET(request) {
                 ? [
                   {
                     filename: campaign.resume.fileName,
-                    path: campaign.resume.fileUrl,
+                    path: require("path").join(process.cwd(), campaign.resume.fileUrl),
                   },
                 ]
                 : [],
